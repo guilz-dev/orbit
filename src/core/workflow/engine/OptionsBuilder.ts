@@ -17,7 +17,10 @@ import {
   resolveMcpServersForProvider,
   resolvePartAllowedToolsForProvider,
 } from './engine-provider-options.js';
-import { providerSupportsStructuredOutput } from '../../../infra/providers/provider-capabilities.js';
+import {
+  providerSupportsMaxTurns,
+  providerSupportsStructuredOutput,
+} from '../../../infra/providers/provider-capabilities.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -179,6 +182,15 @@ export class OptionsBuilder {
     return buildPhase1WorkflowMeta(workflowMeta, processSafety);
   }
 
+  private resolveSupportedMaxTurns(
+    step: WorkflowStep,
+    maxTurns: number | undefined,
+    runtime?: RuntimeStepResolution,
+  ): number | undefined {
+    const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    return providerSupportsMaxTurns(resolvedProvider) === false ? undefined : maxTurns;
+  }
+
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: WorkflowStep, runtime?: RuntimeStepResolution): RunAgentOptions {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
@@ -225,13 +237,14 @@ export class OptionsBuilder {
     overrides: Pick<RunAgentOptions, 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
+    const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildBaseOptions(step, undefined, runtime),
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
       allowedTools: [],
-      maxTurns: overrides.maxTurns,
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
 
@@ -241,11 +254,12 @@ export class OptionsBuilder {
     overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
+    const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildBaseOptions(step, undefined, runtime),
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
-      maxTurns: overrides.maxTurns,
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
 
@@ -292,7 +306,6 @@ export class OptionsBuilder {
       lastResponse,
       onStream: this.engineOptions.onStream,
       structuredCaller: this.requireStructuredCaller(),
-      resolveProvider: (step) => this.resolveStepProviderModel(step, runtime).provider,
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => buildSessionKey(step, runtime?.providerInfo?.provider),

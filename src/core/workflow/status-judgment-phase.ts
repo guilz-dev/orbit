@@ -55,6 +55,13 @@ function buildBaseContext(
   };
 }
 
+function resolveStepProviderInfo(step: WorkflowStep, ctx: PhaseRunnerContext): StepProviderInfo {
+  if (!ctx.resolveStepProviderModel) {
+    throw new Error(`Status judgment requires provider resolution for step "${step.name}"`);
+  }
+  return ctx.resolveStepProviderModel(step);
+}
+
 /**
  * Phase 3: Status judgment.
  *
@@ -109,11 +116,8 @@ export async function runStatusJudgmentPhase(
     });
   }
 
-  const stepProvider: StepProviderInfo = ctx.resolveStepProviderModel
-    ? ctx.resolveStepProviderModel(step)
-    : { provider: ctx.resolveProvider(step), model: undefined };
-
   try {
+    const stepProvider = resolveStepProviderInfo(step, ctx);
     const result = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, step.rules, {
       cwd: ctx.cwd,
       stepName: step.name,

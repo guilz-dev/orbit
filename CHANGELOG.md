@@ -1,0 +1,1878 @@
+# Changelog
+
+[日本語](./docs/CHANGELOG.ja.md)
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [0.42.0] - 2026-05-20
+
+### Added
+
+- `claude-terminal` provider added (#727). A new way to run Claude that drives an interactive Claude Code CLI session inside a tmux pane and reads results back from the session transcript, instead of calling the Anthropic SDK (`claude-sdk`) or the headless CLI (`claude`). Select it with `--provider claude-terminal` or in config. It supports structured output, MCP servers, and allowed-tools, and surfaces permission / ask-user-question prompts back through the terminal. Provider options live under `provider_options.claude_terminal` (`backend: tmux`, `timeout_ms`, `keep_session`, `transcript_poll_interval_ms`). Requires `tmux` to be installed; `maxTurns` is not supported, and API usage figures are unavailable because the terminal transcript does not expose them
+- Opt-in OpenTelemetry observability added (#706, #745). Set `observability.enabled: true` in `~/.takt/config.yaml` (global) or `.takt/config.yaml` (project) — also overridable via the `TAKT_observability__enabled` env var — to emit OTel spans for workflow execution. Each run produces a `workflow.<name>` span with child `step.<name>` spans carrying attributes such as workflow / step name, step type, iteration counts, the resolved provider / model (and their config source), and final status (including abort kind). Spans are emitted as a non-blocking "shadow" alongside normal execution and never alter run behavior. The foundation initializes the OTel Node SDK (service name `takt`) but ships no exporter, so you wire up your own collector via the standard `OTEL_*` environment variables. Off by default
+- `/accept` interactive command added (#733). In interactive assistant mode, `/accept` takes the most recent assistant response verbatim and runs it as the task, without re-summarizing through `/go`. If there is no assistant response yet, it asks you to describe the task first
+- Assistant init files added (#734). List project context files under `assistant.init_files` in `.takt/config.yaml` and they are loaded automatically into every interactive assistant conversation as an "Assistant Init Context" section, so project-specific context (architecture notes, conventions, custom instructions) is included without manual setup. Paths must be relative and inside the project; sensitive files (`.env*`, `.pem`, `.key`, `.npmrc`, `.netrc`, `.git/`, etc.) are rejected, with limits of 16 files, 256 KB per file, and 1 MB total
+- GitHub PR review threads are now classified by resolution state (#746). When TAKT feeds PR review comments into a task, threads are split into Active, Outdated-but-unresolved, and Resolved/Outdated sections, each annotated with who resolved it and whether it is outdated. A review policy directs the agent to focus on active threads, re-check outdated-unresolved ones for current relevance, and skip resolved threads unless the same issue still persists in the code — so already-handled feedback is not re-litigated
+- Enqueue effect `base_branch` can create the branch on demand (#725). The system-workflow enqueue effect's `base_branch` now accepts an object form `{ name, create_if_missing: { from, push } }` in addition to a plain string. When the named base branch does not exist, TAKT creates it from `from` (and pushes it when `push: true`). The builtin `auto-improvement-loop` uses this to create its `improve` base branch from `main` automatically, so the loop runs without manual branch setup
+
+### Changed
+
+- Builtin review facets refined (en + ja). CQRS-ES knowledge gained guidance on event evolution and abstraction boundaries; the AI-antipattern, coding, QA, review, and testing policies tightened their REJECT / APPROVE criteria; and frontend knowledge plus the frontend-review output contract gained canonical-state guidance. These sharpen what the builtin reviewers enforce without changing workflow structure
+
+### Fixed
+
+- OpenCode responses no longer duplicate content when the SDK emits both incremental deltas and a full snapshot (#749). The two streams were previously concatenated, so the assistant text appeared twice in the response
+- Provider rate-limit messages are now preserved instead of being flattened into a generic process error (#730). When a provider reports a rate limit, the original message survives through the response so the cause is visible
+
+### Internal
+
+- Configuration docs and validation error messages aligned to snake_case (#747). The config reference and error text used camelCase names (`workflowArpeggio`, `syncConflictResolver`, `taktProviders`, …) that never matched the actual snake_case YAML keys (`workflow_arpeggio`, `sync_conflict_resolver`, `takt_providers`, …) the parser expects. Documentation and messages now show the keys TAKT actually reads. No behavior or schema change
+- CodeRabbit integration added for repository reviews — `.coderabbit.yaml` configuration, TAKT facets referenced as `code_guidelines`, probe-based config tuning, and a sponsor mention (#737, #738, #742, #744)
+- CI consolidated and retriggered on `/review`. The four `issue_comment`-driven workflows were merged into a single `pr-comment-commands.yml`, and the takt-review comment trigger moved from `/takt-review` to `/review` (#726, #728, #736)
+- Documentation reorganized: added a Design Philosophy page and an External Integrations page, refreshed the workflows guide (including `workflows.ja.md`), and removed stale internal docs (data-flow, provider-sandbox, report-phase-permissions, agents) (#723, #729, #739)
+- Removed brittle non-executable asset tests (README terminology / instruction-template checks) and added testing-policy guidance discouraging such tests (#730)
+
+## [0.41.0] - 2026-05-14
+
+### Added
+
+- Step-level `promotion` field added (#349). Per-step execution-count or AI-judgment escalation for `provider` / `model` / `provider_options`. Each entry can specify `at: <execution-count>` (matches from that execution onward) and/or `condition: ai("...")`, plus the override target (`provider`, `model`, or `provider_options.*` leaf). Multiple entries are evaluated in declaration order with last-match wins. Useful for cases like "use the faster cheap model up to attempt 2, then escalate to Opus when the reviewer keeps rejecting". Promotion is the highest-priority source in model/provider resolution (see CLAUDE.md Model resolution priority order). Promotion is not supported on parallel sub-steps
+- Rate-limit fallback chain added (#716). New `rate_limit_fallback.switch_chain` config (workflow `workflow_config`, project `.takt/config.yaml`, and global `~/.takt/config.yaml`) lets a workflow continue across a Claude / Codex / OpenCode rate-limit hit by re-running the interrupted step on the next provider in the chain. The new session receives a fallback notice instruction (`facets/instructions/_system/fallback-notice.md`) describing why the previous session was interrupted, which step is being retried, and how to rebuild context from `report_dir` / commit diff. Attempts within a single fallback chain are tracked on workflow state and reset on successful step completion
+- AI-generated GitHub Issue titles for `auto-improvement-loop` (#333). The follow-up-task / pr-followup-task structured output schema was extended with `title`, `type`, `scope`, `summary`, `goals`, `acceptance_criteria`, and `labels`. The planning instruction now requires the AI to emit a short, Issue-appropriate title (rejecting generic headings like `# タスク指示書` / `# Task Order`) plus structured task metadata that TAKT renders into the Issue body using `## Summary / ## Goals / ## Acceptance Criteria`. Title validation has fallback handling for missing / too-short / prohibited titles with a `fallback_reason` metric so degradations are observable
+- OpenCode `provider_options.opencode.variant` added (#694). Pass-through string forwarded to the OpenCode `prompt` call as the model variant (e.g. `high` / `low`). Resolvable from step `provider_options`, workflow / persona / project / global config, and `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT` env var
+- `PromptBasedStructuredCaller` retry on malformed JSON output (#695). `decomposeTask` / `requestMoreParts` now wrap each call in `withRetry` (3 attempts, 1000 ms delay) so a transient `\`\`\`json ... \`\`\`` extraction failure, schema validation failure, or `status: 'error'` response from the provider no longer aborts the whole team-leader run. Retry attempts are logged via `log.info` with `attempt` / `maxAttempts` / `error` so retry frequency is observable. The final attempt's error still propagates if all attempts fail, and `phase:start` is deduped across retries so the `phase:start` / `phase:complete` event pair stays balanced
+
+### Changed
+
+- Review-instruction observation lists removed; reviewers now read policy / knowledge facets directly (#718). The nine review instructions (`review-arch` / `review-cqrs-es` / `review-frontend` / `review-qa` / `review-requirements` / `review-security` / `review-terraform` / `review-test` / `ai-antipattern-review`) plus `supervise` and `implement` / `implement-after-tests` no longer carry per-instruction "review observation" enumerations. Instead, every review now runs a three-step procedure: Read the bound Knowledge and Policy Source Paths, enumerate every `##` section in them, then check each section's criteria against the diff. Common review boilerplate (design-judgment lookup, prior-comment tracking, final-decision steps) is consolidated into `policies/review.md` as "Review basic procedure". This fixes the drift observed in #713 where ai-antipattern policy gained a dead-code detection chapter but the review instruction's observation list did not include it. `INSTRUCTION_STYLE_GUIDE.md` was updated to forbid observation enumeration in review-type instructions
+- Phase 1 prompt template gains a "Judgment rules" section (en + ja). Two universal instructions are now injected into every step's main phase: do not infer or guess values that have not been confirmed, and do not trust "already-fixed" / "already-confirmed" memories from earlier iterations of the same session — re-verify against the current file/working tree immediately before judging. Targets context-rot on long-running sessions
+- `cqrs-es` knowledge clarifies Aggregate decision boundaries. Adds a decision table that explicitly separates state recoverable by event replay (Aggregate responsibility) from format interpretation / ownership lookup of external identifiers (API / UseCase layer responsibility), with the principle that external-identifier interpretation does not belong inside the Aggregate
+- Frontend / React knowledge reinforced (knowledge `frontend.md` / `react.md`, en + ja). Targeted additions to existing chapters to tighten review criteria
+
+### Fixed
+
+- `claude-sdk` provider no longer flags every step as rate-limited when the organization does not provide an overage allowance. `rate_limit_event` is emitted as an informational stream event each call, and `overageStatus = 'rejected'` is the steady state for organizations without overage. The previous OR-judgment treated a standalone `rejected` overage status as an active rate limit, so each step aborted immediately. `isRejectedRateLimitEvent` now requires the base `status === 'rejected'` (and falsely-fixed tests were corrected) so only an actual rate-limit event triggers fallback
+
+### Internal
+
+- `delay()` helper extracted to `shared/utils/delay.ts` and shared between `ArpeggioRunner` and `PromptBasedStructuredCaller`. Includes unit tests under `src/__tests__/delay.test.ts`
+
+## [0.40.0] - 2026-05-10
+
+### Added
+
+- `takt list` failed-task action `Requeue` added (#435). Previously the only options were `Retry` (always conversation-driven) and `Delete`. `Requeue` directly returns the task to the pending queue without entering a conversation, useful for quickly resending a failed task while working on something else. The `retry_note` is auto-generated from the failure context (failed step name + error excerpt + a hint that the user has acknowledged the issue), so the next run still receives `## Requeue Notes` context. Existing `retry_note` values are accumulated rather than overwritten
+- AI antipattern review now runs on every reviewers cycle. Added `ai-antipattern-review-2nd` to the parallel reviewers step in `default` / `default-mini` / `default-high` / `backend` / `backend-cqrs` / `dual` / `dual-cqrs` / `frontend` / `terraform` / `takt-default`, so over-defensive code or ghost comments introduced by a `fix` pass are caught on every review pass instead of only the initial one. Split workflows (`backend` / `dual` / `frontend` series) place it on `reviewers_1` only, since `fix` always returns to `reviewers_1`
+
+### Changed
+
+- **BREAKING:** AI antipattern review/fix facet names unified under `ai-antipattern-*` and split into 1st/2nd. `ai_review` (standalone) -> `ai-antipattern-review-1st`, `ai_review` (parallel sub-step) -> `ai-antipattern-review-2nd`, `ai_fix` / `ai_no_fix` -> `ai-antipattern-fix` / `ai-antipattern-no-fix`, `ai_fix_parallel` -> `ai-antipattern-fix-parallel`. `review-ai.md` is consolidated into `ai-antipattern-review.md` and removed. `loop-monitor-ai-fix.md` is renamed to `loop-monitor-ai-antipattern-fix.md`. Custom workflows that referenced any of these step names, instruction files, or report formats need to be updated
+- Review policy treats CHANGELOG / RELEASE_NOTES / MIGRATION as point-in-time history (#710). Reviewers no longer REJECT past entries solely because their config keys, API names, or behaviors no longer match current code. Reviewers can still REJECT factual errors in newly added entries (relative to the target release) and Markdown / formatting issues. Targets are identified by file name (`CHANGELOG.md`, etc.) or conventional headings (`### Changed` / `### Added` / dated release headings)
+- `default` / `default-mini` / `default-high` / `takt-default` workflows refactored to share two internal subworkflows: `default-draft` / `default-peer-review` (default series) and `draft` / `peer-review` (takt-default series). The four parent workflows are now `workflow_call`-based shells, and the subworkflows expose `params` (e.g. `impl_knowledge`, `fix_knowledge`, `arch_knowledge`) so each parent injects its own knowledge facets without duplicating step definitions. The subworkflows are `visibility: internal` and not selectable from the workflow UI. Observable behavior is unchanged
+- Quiet / Passthrough mode show mode-specific intros (#593). Previously both modes printed the assistant-mode intro listing slash commands like `/go` / `/cancel` that those modes do not actually parse. Quiet mode now prints `interactive.ui.introQuiet` and Passthrough mode prints `interactive.ui.introPassthrough`, both English and Japanese, so the displayed instructions match what the mode actually does
+- `auto-improvement-loop` structured-output schemas tightened for Codex compatibility. `task_markdown` and `issue` are now required on `followup-task`, and `task_markdown` is required on `pr-followup-task`. The planning instruction prompts now explicitly state how to populate these fields for each action (e.g. empty string for `wait_before_next_scan` / `prepare_merge` / `reject_pr`). Previously a Codex provider could produce a partial `agent_message` without these fields and the parent workflow had no schema enforcement
+
+### Fixed
+
+- Codex provider structured output extraction uses the final `agent_message` text instead of the concatenated stream content (#707). When a Codex session emitted multiple `agent_message` text events (typical when intermediate JSON drafts precede the final answer), the previous implementation concatenated all of them and tried to parse the resulting JSONL-like blob as a single JSON object, causing `Structured output response is missing` aborts on workflows like `auto-improvement-loop`. The last `agent_message.text` is now parsed independently when an `outputSchema` is configured, so older intermediate drafts are not incorrectly adopted and the run no longer aborts
+
+### Internal
+
+- CI: `takt-review` workflow now cancels stale runs when a new commit lands on the same PR (`concurrency.cancel-in-progress: true`), avoiding wasted reviewer runs against an outdated revision
+
+## [0.39.0] - 2026-05-02
+
+### Added
+
+- Facet inheritance with `{extends:<parent>}` syntax added (#690). File-based facets can extend a parent facet of the same kind; the parent is resolved through the facet kind and layer order, with self-reference exclusion and circular detection both done by source path. Applies to instructions, policies, knowledge, output contracts, and loop monitor judge instructions. The parent name must be a bare facet name (no path or `@scope` references); persona facets do not support inheritance
+- Step-level `allow_git_commit` field added (#587). Opt-in flag (default `false`) that removes the standard "do not run git add / commit / push" prohibition injected into Phase 1 / Phase 2 instructions. Useful for workflows that consume many issues per task and need to commit per work unit
+- `default-mini` builtin workflow added: a lightweight variant of `default` with `write_tests` removed (`plan -> implement -> AI antipattern review -> parallel review -> complete`). Registered to both Quick Start and Mini categories and the builtin catalog
+- Run checkpoint resume added (#568). `.takt/runs/<slug>/meta.json` now records `currentStep` / `phase` / `iterations` / `resumePoint` continuously during run execution, and `tasks.yaml` accepts `start_step` (with `start_movement` retained as a backward-compatible alias) so interrupted runs resume from the last known step on retry
+- Agent failure categorization added (#678). Team leader part failures now distinguish `external_abort` / `part_timeout` / `provider_error` / `stream_idle_timeout` and surface the category in the trace report, session log, and aggregated error message instead of a generic "execution aborted". Codex client preserves abort cause (`timeout` / `external`) and propagates it through the failure detail
+
+### Changed
+
+- System-mode workflow execution is no longer restricted to the project workflows root (#691). `mode: system`, workflow-level `runtime.prepare`, and step `allow_git_commit: true` were previously rejected unless the workflow lived under `.takt/workflows/`. Builtin workflows (e.g. `auto-improvement-loop`) and user workflows under `~/.takt/workflows/` are now accepted, so reusable orchestration workflows can be installed globally and invoked by name. The previous workflow trust boundary that re-classified workflows by file path is removed in favour of the loader-confirmed `WorkflowTrustInfo`
+- `auto-improvement-loop` PR-branch action set simplified (#676). Removed `comment_on_pr` and `noop`; added `reject_pr`. The PR branch now chooses among `enqueue_from_pr` / `prepare_merge` / `reject_pr`. `reject_pr` closes the PR via `close_pr` effect without leaving a comment, deleting the branch, or re-enqueueing the task. The `pr-followup-task` schema enum was updated accordingly
+- `auto-improvement-loop` issue and fresh-planning paths tightened (#685). Removed `noop` from `plan_from_issue` and `plan_fresh_improvement`; planning instructions now explicitly reject low-value, cosmetic-only, ambiguous, or duplicate tasks and require concrete deliverables and completion conditions. The `followup-task` schema action enum is reduced to `enqueue_new_task` / `wait_before_next_scan`
+- Rate-limit cause is preserved through workflow abort (#569). When a Claude rate limit is observed in provider events, downstream phase / parallel / workflow errors now surface as `Rate limit exceeded. Please try again later.` instead of the generic `Claude Code process exited with code 1`. `AgentResponse.errorKind` is normalized at the provider boundary so session resume / report-phase retry paths no longer flatten the cause
+
+### Fixed
+
+- OpenCode shared server processes no longer leak after takt exit (#550). The server kept running in the background after `takt` terminated, accumulating across runs. Cleanup now runs on takt exit so OpenCode provider sessions release their server processes deterministically
+- Interactive `/go` works without prior conversation history (#680). `/go` could fail when there was no preceding dialog; the first input now flows directly into workflow execution while existing dialog-driven flows are preserved
+- `takt watch` stdin handlers cleaned up after stop. The immediate-SIGINT-exit installer now returns a cleanup hook that runs after `parseAsync` and slash-fallback paths, so stdin handlers installed for watch are released and process termination is no longer blocked
+- Interactive mode now shows progress feedback while the AI is responding. `Assistant is thinking...` is displayed after each user input is sent, and `Creating instruction...` is displayed while `/go` summarizes the conversation, so the user is no longer left wondering whether takt is hung. Stdin is paused for the duration of these calls. LF (`\n`) now submits the line in the multiline input editor in addition to CR (`\r`), so pasted text and `\n`-terminated inputs commit cleanly; `Shift+Enter` (CSI `13;2u`) remains the way to insert a literal newline
+
+## [0.38.0] - 2026-04-25
+
+### Added
+
+- `persona_providers.<persona>.provider_options` added (#623). Persona-level `provider_options` (e.g. `claude.effort`, `codex.reasoning_effort`) can now be configured alongside `provider` / `model`, removing the need to repeat the same options across every step. Resolution priority: step > workflow > persona > project > global > default
+- Report handles `{current_report}` / `{previous_report}` / `{report_history}` / `{peer_reports}` added to instruction template variables (#627). Facets can now reference self/peer report files abstractly without hardcoding filenames; usable in `reviewer` / `fix` / `supervise` style steps
+- Standardized verification evidence section added to review output contracts (#628). `architecture-review`, `qa-review`, `testing-review`, `security-review`, `requirements-review` now emit a common build / test / behavior-check section with target, content, and result (or explicit "not verified") so supervisors can evaluate evidence consistently
+- `default-high` workflow added: full-spec general-purpose workflow combining team-leader implementation, 5-parallel review, AI antipattern review with arbitration, and supervision (`plan -> write_tests -> team-leader implement -> AI review -> 5-parallel review -> fix -> supervise -> complete`). Quick Start categories reorganized into `default` / `default-high` / `frontend` / `backend` / `dual`
+- `takt-default-refresh-all` / `takt-default-refresh-fast` workflows added: `session: refresh` variants of the TAKT development workflow. `refresh-all` refreshes every step for full conversation-carry-over comparison; `refresh-fast` refreshes only context-heavy steps (`write_tests`, `ai_review`, reviewers, `fix`)
+- `takt watch --ignore-exceed` option added (#651). Same semantics as `takt run --ignore-exceed`: ignores workflow `max_steps` and continues running tasks instead of marking them `exceeded`
+- `provider_options.*.effort` value and source surfaced in console / NDJSON (#647). Active provider's effort (`claude.effort`, `codex.reasoningEffort`, `copilot.effort`) is shown alongside `Provider:` / `Model:` in console output, with `(source: step|persona|global|...)` suffix in debug / verbose mode. NDJSON `step_start` records always include `providerOptions` and `providerOptionsSources` for the full tracked path set
+- Task-based PRs without an Issue now use `order.md` content for the `## Summary` section of the PR body (#600). Previously the section was empty; now reviewers can read the full task instructions directly from the PR
+
+### Changed
+
+- `<!-- takt:managed -->` hidden marker is now opt-in, not a default (#665). Normal `--auto-pr` / `autoPr` no longer attaches the marker; only orchestration-driven task creation (e.g. `enqueue_task` from `auto-improvement-loop`) adds it. PRs created by ordinary pipeline / task execution are now indistinguishable from human-authored PRs
+- Workflow `source` / `trust` resolution unified at the loader entry (#660). Parser / normalizer / doctor / `workflow_call` child loads now consume the `WorkflowTrustInfo` produced by the loader instead of re-classifying workflows by file path. Builtin privileged workflows (e.g. `auto-improvement-loop` with `kind: system` steps) are now treated consistently across discovery / runtime / doctor entrypoints
+- Interactive mode `--pr` source context separated from conversation history (#656). PR review comments fetched by `--pr` are no longer pushed into `history` as a hidden user message; they are kept as a separate "Source Context" block. `/go` summaries no longer treat the full PR comment thread as the user's request, preventing instruction bloat
+- `takt-default` `implement` step (team leader / part workers) now receives the parent `takt run` PID as a protected PID along with a short process-safety policy (#603). Prevents AI cleanup logic from killing the parent run via `pkill` / `killall` / name-based kill when stray child processes are present
+- Retry / re-execution now syncs the project-local `.takt/` directory from the root repository before re-running on an existing worktree (#607). Root-side facet / workflow / output-contract updates now take effect on retry by default, matching first-run behavior
+- PR sync system effects (`sync_with_root`, `resolve_conflicts_with_ai`) reorganized to operate on PR scope via a dedicated temporary worktree / checkout (#661). Effects no longer depend on the orchestration step's `cwd`, so `prepare_merge` from `auto-improvement-loop` succeeds deterministically regardless of where the orchestration runs
+
+### Fixed
+
+- `team_leader + output_contracts.report` no longer aborts when the root step has no session (#655). `runReportPhase()` now accepts the team leader's aggregated `lastResponse` as a fallback and only fails when both root session and `lastResponse` are absent
+- Builtin workflow `source` / `trust` is preserved during discovery loading inside the takt repo itself (#659). Stop-gap fix that prevented `auto-improvement-loop` and other builtin privileged workflows from being reclassified as project workflows when discovered from the takt repository root (root cause addressed in #660)
+- `provider_options.copilot.effort` round-trip persistence fixed (#626). `denormalizeProviderOptions()` now writes back `copilot.effort` instead of silently dropping it on config save
+- Removed the dependency on the `takt-managed` GitHub label for managed-PR identification. The hidden body marker `<!-- takt:managed -->` is now the single identifier
+
+### Internal
+
+- SDK dependencies bumped: `@anthropic-ai/claude-agent-sdk` ^0.2.71 -> ^0.2.119, `@openai/codex-sdk` ^0.114.0 -> ^0.125.0 (bundled `@openai/codex` binary 0.114.0 -> 0.125.0), `@opencode-ai/sdk` >=1.2.10 <1.3.0 -> ^1.14.24 (v2 export retained)
+- E2E test added for the `claude` provider verifying that `provider_options.allowed_tools` propagates to `claude --allowed-tools` so `Bash(python3 -m pytest:*)` runs without approval prompts in real claude provider runs
+- Test policy updated: line count thresholds are no longer treated as test failures in the review workflow
+
+### Experimental
+
+The following features are still being tuned. Behavior, schema, and naming may change in subsequent releases. Use only if you are willing to follow breaking changes.
+
+- `auto-improvement-loop` builtin workflow (#653). An infinite-loop orchestration workflow that scans the repository on a schedule and routes work by priority (PR -> Issue -> fresh improvement -> wait -> route)
+- `max_steps: infinite` (no step cap, no `exceeded` status). Currently used by `auto-improvement-loop`
+- `pr_list` system input (open PRs filtered by `author` / `base_branch` / `head_branch` / `draft`)
+- `issue_list` / `issue_selection` system inputs (#662). Repo-wide open Issue observation from orchestration workflows
+- `task_queue_context.items` (queue contents observable from `when:`)
+- `when:` array references with `exists(list, item.field == "X")` function. Initial scope: `==` and `&&` only
+- `followup-task` builtin structured-output schema with `enqueue_new_task` / `comment_on_pr` / `enqueue_from_pr` / `prepare_merge` / `noop` actions
+
+## [0.37.0] - 2026-04-20
+
+### Added
+
+- callable subworkflow に `params` / `returns` / `visibility: internal` を追加 (#635)。親 `workflow_call.args` から子 workflow に引数を渡し、子は `return` で論理結果を親に返せるようになった。param の対応型は `facet_ref` / `facet_ref[]`、`facet_kind` は `knowledge` / `policy` / `instruction` / `report_format`。子 workflow 内では `$param:` で facet field を差し替え可能。`visibility: internal` で内部用 subworkflow をワークフロー選択 UI から隠せる
+- provider / model の解決ソースを log に表示 (#370)。`cli` / `persona_providers` / `step` / `project` / `global` / `default` のどの層で確定したかを debug または verbose 時にコンソール表示し、NDJSON `step_start` イベントの `providerSource` / `modelSource` フィールドには常時記録。期待と異なる provider / model が選ばれたときの原因特定が容易になる
+- `provider_options.claude.effort` に `xhigh` を追加。Opus 4.7 のみサポートされる reasoning level（`high` と `max` の中間）。Claude Agent SDK を 0.2.114 へバンプ。モデル能力テーブルで早期検証し、`claude-opus-4-6` + `xhigh` のような非互換組み合わせは具体的なエラーメッセージで弾く。alias (`opus` / `sonnet` / `haiku`) と未知モデルは permissive に SDK 側へ委ねる
+- `takt run` に `--ignore-exceed` オプションを追加 (#629)。指定時は workflow の `max_steps` 超過を無視して最後まで実行継続する。未指定時は従来通り `exceeded` 扱いで requeue される
+
+### Changed
+
+- **BREAKING:** 旧用語 `piece` / `movement` のレガシー環境変数サポートを完全に削除 (#637)。`TAKT_PIECE_*` / `TAKT_MOVEMENT_*` 形式の環境変数はマッピングされなくなる。`TAKT_WORKFLOW_*` / `TAKT_STEP_*` など新名称の環境変数への移行が必須
+
+### Fixed
+
+- Codex プロバイダーでタイムアウト（`abortCause === 'timeout'`）発生時に workflow が停止していた問題を修正 (#640)。タイムアウトをリトライ対象に追加し、最大 2 回までリトライする。外部からの明示的な中止（`abortCause === 'external'`）はリトライ不可のまま維持
+
+## [0.36.0] - 2026-04-15
+
+### Added
+
+- サブワークフロー呼び出し（`call:` ステップ）を追加: ステップに `call: <workflow-name>` を指定すると、別のワークフローをサブルーチンとして実行可能。呼び出し先ワークフローは `subworkflow: { callable: true }` 宣言が必要。`overrides:` でプロバイダ/モデルの上書きも可能。再帰呼び出し検知・最大ネスト深度 5 (#153, #624)
+- システムステップ（`kind: system`）を追加: AI エージェントを介さずに実行されるステップ。`system_inputs:` でランタイムコンテキスト（タスク、ブランチ、PR、Issue、タスクキュー）をワークフロー状態にバインドし、`effects:` で副作用（`enqueue_task`, `comment_pr`, `sync_with_root`, `resolve_conflicts_with_ai`, `merge_pr`）を実行 (#586, #622)
+- 決定論的 `when:` ルール条件を追加: ルールに `condition:` の代わりに `when:` を指定すると、比較演算子（`==`, `!=`, `>`, `<`, `>=`, `<=`）やブール論理（`&&`, `||`）、ワークフロー状態参照（`context.*`, `structured.*`, `effect.*`）で AI を介さずルーティング (#586, #622)
+- ステップの構造化出力（`structured_output:`）を追加: `structured_output: { schema_ref: "<name>" }` でワークフロー定義の `schemas:` マップ内の JSON スキーマを参照し、エージェント出力をバリデーション・保存。他ステップから `{structured:step.field}` で参照可能 (#586, #622)
+- インタラクティブモードにスラッシュコマンド補完メニューを追加: `/` 入力時にインライン補完ドロップダウンを表示。矢印キーで選択、Tab で適用、Enter で確定。コンテキストに応じて `/retry` `/replay` の表示を制御 (#580)
+- Copilot プロバイダに `effort`（推論の深さ）設定を追加: `provider_options.copilot.effort` で `low` / `medium` / `high` / `xhigh` を指定可能 (#625)
+- `takt workflow init <name>` コマンドを追加: ワークフローのスキャフォールドを生成。`--template minimal|faceted`、`--steps <count>`、`--description <text>`、`--global` オプション対応 (#597)
+- `takt workflow doctor [targets]` コマンドを追加: ワークフロー YAML の定義を検証。ターゲット未指定時は `.takt/workflows/` 内の全ワークフローを検証。ワークフロー名またはファイルパスを指定可能 (#597)
+- 画面専用 API ポリシー（`screen-api`）を追加: 画面単位の専用エンドポイント、サーバー主導のページネーション、サーバーサイド集約、スコープ付きタブ通信を強制。全 dual 系ワークフローに適用
+- AI アンチパターンポリシーに早期キャッシュ戦略の禁止ルールを追加: 明示的な要求や計測なしにキャッシュレイヤー・localStorage キャッシュ・過度な memoization を導入することを REJECT
+
+### Changed
+
+- **BREAKING:** 旧用語 `piece` / `movement` を完全に廃止し、`workflow` / `step` に統一 (#602, #609)。ワークフロー YAML の `piece_config:` → `workflow_config:`、`movements:` → `steps:`、`initial_movement:` → `initial_step:`、`max_movements:` → `max_steps:` への移行が必須。ディレクトリも `~/.takt/pieces/` → `~/.takt/workflows/`、`.takt/pieces/` → `.takt/workflows/` に変更。レガシー環境変数（`TAKT_PIECE_*`）は引き続きマッピングされる
+- 非対応プロバイダ向けの provider-specific オプション（`claude.allowed_tools`、`mcp_servers`、`team_leader.part_allowed_tools`）をサイレントドロップするよう変更。ワークフローをプロバイダ非依存に保てるように改善
+- 全レビュー系インストラクションのエビデンスガイダンスを統一: `reopened` ステータスの追加、検証ターゲット・確認内容・観測結果の記録を必須化、オープン指摘事項の脱落防止ルールを追加
+
+### Fixed
+
+- 全 audit 系ワークフロー（7 種）で supervise ↔ review 間のデッドロックを修正。review ステップに `output_contracts` を追加し、ループモニターの閾値を 4→3 に調整、ジャッジの選択肢を 3 択（十分/進捗あり/停滞）に変更
+
+### Internal
+
+- `piece*` → `workflow*` のファイル名一括リネーム（84 ファイル、テスト・E2E フィクスチャ・ドキュメント含む）
+- `WorkflowEngine` をリファクタリング: `WorkflowEngineSetup`、`WorkflowEngineStepCoordinator`、`WorkflowRunLoop` に責務を分離
+- セッションロガーを `sessionLoggerPhaseTracker.ts`、`sessionLoggerRecordFactory.ts` に分割
+- `CapabilityAwareStructuredCaller` を追加し、プロバイダの構造化出力対応可否に応じたルーティングを実装
+- ルール評価を 10 段階フォールバックに拡張（`when:` 条件の評価ステージを追加）
+- `workflow-state-access.ts` でテンプレート参照（`{context:*}`、`{structured:*}`、`{effect:*}`）の統一解決を実装
+
+## [0.35.4] - 2026-04-11
+
+### Changed
+
+- レビューポリシーにツール出力の信頼性検証ルールを追加: ツール出力が正常に読めることを確認してから指摘すること、検索失敗だけでコード不在と断定しないことをルール化
+
+### Fixed
+
+- ターミナルの行数が少ない環境で選択メニューが正常に動作しない問題を修正。ビューポートベースのスクロールを追加 (#608)
+- Windows で `.cmd` shim の spawn が失敗する問題を修正（Claude Headless、Cursor、Copilot プロバイダ）
+
+### Internal
+
+- 選択メニューを `select-menu.ts`、`select-viewport.ts` に分離し、純粋関数化とビューポートテストを追加
+- ワークフロードキュメントの例で古いフィールド名を使っていた問題を修正 (#619)
+
+## [0.35.3] - 2026-04-10
+
+### Added
+
+- `loop_monitors` の judge に `provider`/`model` フィールドを追加。ジャッジムーブメントのプロバイダーとモデルを明示的に指定可能に (#599)
+- `takt list --action sync` を非インタラクティブモードでサポート
+
+### Changed
+
+- Codex プロバイダーのリトライ戦略を強化: 最大リトライ回数を 3→9 に増加、ベース遅延を 250ms→1000ms に変更、"at capacity" エラーを自動リトライ対象に追加 (#614)
+
+### Fixed
+
+- ループモニタージャッジが常にデフォルトプロバイダーで実行される問題を修正。トリガー元ムーブメントのプロバイダー/モデル設定を継承するよう変更 (#599)
+- 完了済みタスクのブランチ操作（merge/try-merge/diff）でルートブランチが欠落している場合にエラーとなる問題を修正。クローンから自動復元するよう改善 (#616)
+- Phase 2 エラーイベント（`phase:complete`）が `phase:start` より先に発火されることがある問題を修正
+
+### Internal
+
+- テストを多数追加（codex-client-retry, engine-loop-monitors, it-completed-task-root-branch, it-piece-loader, provider-resolution, taskBranchLifecycleActions 等）
+- `providerModelCompatibility` をコアモジュール（`src/core/piece/`）に移動
+- タスク実行後のプッシュ処理を簡素化（clone 内フォールバック push を廃止し、ルートリポジトリ経由に一本化）
+- git コマンドのエラーメッセージに stderr 詳細を含めるよう改善
+
+## [0.35.2] - 2026-04-09
+
+### Added
+
+- `takt list` でスタックした実行中タスクを強制失敗にできる「Mark as failed」アクションを追加 (#604)
+- タスクレコードに `run_slug` を追加し、実行中タスクの現在のステップ情報を `meta.json` から取得可能に
+
+### Changed
+
+- `write_tests` ムーブメントの出力契約を `test-scope.md` + `test-decisions.md` の2ファイルから `test-report.md` の1ファイルに簡素化
+
+### Internal
+
+- CI auto-tag ワークフローから冗長な build・test ステップを削除
+- `RunMeta` 型を `src/core/piece/run/run-meta.ts` に抽出し、`currentStep`/`currentIteration` トラッキングを追加
+
+## [0.35.1] - 2026-04-09
+
+### Added
+
+- タスク実行中に常時スピナーを表示: TTY 環境でタスク実行中にアニメーションスピナーを表示し、処理中であることを可視化
+- Claude Headless の thinking ストリーム表示: ヘッドレスモードで thinking トークンをリアルタイム表示。parallel モードでは色分け表示に対応
+
+### Changed
+
+- SIGINT（Ctrl+C）でクローン作成中でも即座にプロセスを終了できるよう改善: `run`/`watch` コマンドで raw mode による即時検知を導入し、git サブプロセスを AbortSignal で中断可能に
+
+### Fixed
+
+- Codex プロバイダが Git リポジトリ外での実行を拒否する問題を修正
+
+### Internal
+
+- StatusLine の wrapWrite をアロー関数にリファクタリング
+- StreamDisplay のハンドラーをムーブメントごとにキャッシュするよう最適化
+- クローン作成関連のテスト追加・更新
+
+## [0.35.0] - 2026-04-07
+
+### Added
+
+- Claude Headless プロバイダを追加: Claude CLI のヘッドレスモード（`claude --print`）をサブプロセスとして実行する新プロバイダ。`claude` プロバイダ名で利用可能 (#584)
+- trace ログレベルを追加: `poll_tick`/`no_new_tasks` などの高頻度ログを抑制し、デバッグログの可読性を向上。`logging.trace: true` で有効化
+- レガシー設定キーの非推奨警告: `piece_*`/`movement*` 系の旧キー使用時に deprecation warning を表示し、新しい `workflow_*`/`step*` キーへの移行を促進 (#581, #594)
+- Mock プロバイダで `delayMs` と AbortSignal をサポート: SIGINT テスト等で利用可能に (#595)
+
+### Changed
+
+- **BREAKING:** `claude` プロバイダがヘッドレス CLI モードをデフォルトに変更。従来の SDK ベースプロバイダは `claude-sdk` として引き続き利用可能 (#584)
+- クローン環境からのプッシュに relay push パターンを導入: 一時 ref 経由でプッシュすることで、チェックアウト中のブランチへの直接プッシュによるデータ損失を防止 (#592)
+- PR 由来タスクのメタデータ伝搬を改善: `shouldPublishBranchToOrigin` フラグにより、ローカルプッシュ失敗時にクローンから直接 origin へプッシュするフォールバックを追加 (#592)
+- dual/backend ワークフローの `max_steps` を 60 に増加
+
+### Fixed
+
+- `pr_body_template` が `--task` オプション実行時に無視される問題を修正 (#538)
+- 既存 PR ブランチ更新時にリモートを正として worktree を作成するよう修正 (#557)
+- SIGINT（Ctrl+C）が AI レスポンス待機中に正しくアボートされない問題を修正 (#595)
+- mise 等のバージョン管理ツール環境下で Claude SDK サブプロセスの PATH が安定しない問題を修正 (#591)
+- ジャッジムーブメントのプロバイダフォールバック解決が正しく機能しない問題を修正 (#577)
+- exceeded 時のワークツリーパスが正しく解決されない問題を修正 (#575)
+- PR 作成時のエラー詳細が失われる問題を修正
+- non-fast-forward プッシュ拒否時にヒントメッセージを表示するよう改善
+
+### Internal
+
+- `.takt/config.yaml` の非推奨キーをリネーム
+- レガシーワークフローキー非推奨警告の重複排除 (#594)
+- `AgentSetup` から `claudeAgent`/`claudeSkill` フィールドを削除（Headless プロバイダ移行に伴い不要に）
+- 型定義ファイルから冗長な JSDoc コメントを整理
+- review-fix-takt-default ワークフローの max_steps を増加
+
+## [0.34.0] - 2026-04-03
+
+### Added
+
+- StructuredCaller インターフェースを導入: プロバイダーのネイティブ構造化出力（Structured Output）をサポートし、ステータス判定・条件評価・タスク分解でテキストパースに代わる JSON ベースの応答抽出が可能に (#570)
+- Traced Config を導入: `traced-config` パッケージによる設定値の出所追跡（環境変数・設定ファイル・デフォルト値）をサポート (#558)
+- 並列ステップに `concurrency` フィールドを追加: セマフォベースの同時実行数制御が可能に
+- 無効なワークフロー YAML のロード時に警告を表示するようになった（スキーマバリデーションエラーの詳細を表示） (#540)
+- 計画・レビュー用ファセットを強化: planner・requirements-reviewer・supervisor のペルソナ、plan・requirements-review・supervisor-validation の出力契約、coding ポリシーを新規追加
+- `takt add` コマンドで `--workflow` オプションによるワークフロー指定に対応
+
+### Changed
+
+- **BREAKING:** ワークフロー YAML のキーをリネーム: `movements` → `steps`、`initial_movement` → `initial_step`、`max_movements` → `max_steps`、`piece_config` → `workflow_config`。旧キーは互換エイリアスとして引き続き使用可能 (#576)
+- **BREAKING:** ビルトインワークフローのディレクトリを `builtins/{lang}/pieces/` から `builtins/{lang}/workflows/` に移動。設定キーも `piece_categories` → `workflow_categories`、`enable_builtin_pieces` → `enable_builtin_workflows` にリネーム。旧キーは互換エイリアスとして引き続き使用可能 (#571, #561)
+- **BREAKING:** CLI オプション `-w, --piece` を `-w, --workflow` にリネーム。`--piece` はレガシーエイリアスとして使用可能 (#576)
+- **BREAKING:** ワークフロー YAML の `instruction_template` フィールドを削除。`instruction` フィールドを使用すること (#539)
+- `takt-default` ワークフローの `max_steps` を 50 に増加（`default` は 30 のまま）
+- 設定キーのエイリアス解決時に旧キーと新キーの両方が異なる値で存在する場合はエラーを発生させるよう変更
+
+### Fixed
+
+- Claude SDK のエラーペイロードが正しく処理されない問題を修正
+- ワークフロー用語の統一: CLI ヘルプ、エラーメッセージ、ドキュメントを `workflow` / `step` 用語に更新
+- ワークツリーモードで PR の Issue 解決がプロジェクト cwd から正しく行われるよう修正
+- Cursor Agent のヘッドレスワークツリー実行で `--trust` フラグが渡されるよう修正
+- ワークツリー環境下で `runtime.prepare` が設定されている場合にセルフホスト GitLab の `glab` CLI 認証が失敗する問題を修正 (#563)
+- ピースプロバイダー解決の統一化
+
+### Internal
+
+- Zod スキーマを `schemas.ts` から `schema-base.ts`・`workflow-schemas.ts`・`config-schemas.ts` に分割
+- 環境変数オーバーライドを spec ベースの宣言的定義にリファクタリング
+- レガシーの `step_provider`・`step_model` フィールドを削除
+- TeamLeader のパートタイムアウト処理を簡素化
+- `yaml` パッケージを v2.8.3 に更新
+- ドキュメント（README、CLI リファレンス、設定ガイド等）をワークフロー用語に全面更新
+
+## [0.33.2] - 2026-03-26
+
+### Added
+
+- 読み取り専用の監査ピースを追加: `audit-architecture`, `audit-architecture-frontend`, `audit-architecture-backend`, `audit-architecture-dual`, `audit-e2e`, `audit-unit`。コードを変更せずにモジュール境界やカバレッジギャップを列挙し、Issue 作成可能なレポートを出力
+
+### Changed
+
+- `security-audit` ピースを `audit-security` にリネーム（監査ピース群の命名規則を統一）
+- ビルトインピースカテゴリを再構成: 🧪 Testing カテゴリを廃止し、監査ピースを 🔍 Review カテゴリに統合
+- `fill-unit`, `fill-e2e` ピースを削除（`audit-unit`, `audit-e2e` に置き換え）
+
+### Fixed
+
+- GitLab セルフホスト環境で worktree（共有クローン）実行時に MR 作成が失敗するバグを修正。Git プロバイダーの `cwd` がクローンパスに正しく伝播するよう変更 (#552)
+
+### Internal
+
+- Git プロバイダーの `cwd` 伝播に関するテストカバレッジを追加
+- 設定ドキュメントから `verbose` オプションの記載を削除し、`logging.level` による設定方法に統一 (#543)
+
+## [0.33.1] - 2026-03-24
+
+### Changed
+
+- ファイナルレビューとセキュリティレビューのガードレールを強化: supervisor のファセット、セキュリティナレッジ、レビューポリシー・インストラクションを拡充
+
+### Fixed
+
+- GitLab セルフホスト環境で `gitlab.com` の認証がない場合にタスク完了後の MR 作成が必ず失敗するバグを修正。`glab auth status` がリモートのホスト名を指定して認証チェックするよう変更 (#545)
+
+### Internal
+
+- GitLab プロバイダーのテストカバレッジを拡充（セルフホスト環境の認証チェック、ホスト名ベースの CLI ステータス検証）
+
+## [0.33.0] - 2026-03-22
+
+### Added
+
+- GitLab VCS プロバイダーを追加: `glab` CLI を使った Issue 取得・マージリクエスト作成・レビューコメント取得に対応。git リモート URL からの自動検出をサポートし、`vcs_provider: gitlab` による明示的な設定も可能 (#512)
+- インタラクティブモード用プロバイダー設定 (`takt_providers.assistant`) を追加: ピース実行とは独立したプロバイダー/モデルをインタラクティブモードに指定可能 (#483)
+
+### Changed
+
+- BREAKING: ピース YAML の MCP サーバー設定をデフォルト拒否に変更。使用するには `piece_mcp_servers` でトランスポート別に明示的に許可が必要 (#524)
+- BREAKING: ピース YAML の Arpeggio カスタムコード（カスタムデータソース、インライン JS、外部マージファイル）をデフォルト拒否に変更。使用するには `piece_arpeggio` で明示的に許可が必要 (#521)
+- BREAKING: ピース YAML の runtime prepare カスタムスクリプトをデフォルト拒否に変更（ビルトインプリセットは常に許可）。使用するには `piece_runtime_prepare.custom_scripts: true` が必要 (#520)
+- BREAKING: sync conflict resolver の自動ツール承認をデフォルト拒否に変更。使用するには `sync_conflict_resolver.auto_approve_tools: true` が必要 (#522)
+- team leader のタスク分解における最大ターン数を 4 → 5 に引き上げ (#511)
+- supervisor ファセットを強化: 要件カバレッジのエビデンスベース検証を追加
+- ペルソナファセットからクロスエージェント参照を除去し、ピース横断での再利用性を向上
+
+### Fixed
+
+- パイプラインモードで auto-commit の push 失敗時に PR 作成が無診断で失敗する問題を修正 (#532)
+- `.takt/.gitignore` のファセットパスが実際のディレクトリ構造と不一致だった問題を修正 (#535)
+- レビューピースの gather モードでブランチ検出が不正確だった問題を修正（完全一致を要求するよう変更） (#523)
+- レビューピースで reject findings のフォーマットが正しく処理されない問題を修正 (#528)
+- パイプラインモードでタスクブランチが PR 作成前に push されず、PR 作成が失敗する問題を修正
+
+### Internal
+
+- GitLab プロバイダーのテストカバレッジを追加（issue, pr, provider, utils）
+- VCS プロバイダーの自動検出・ファクトリ・フォーマットのテストカバレッジを追加
+- MCP サーバー・Arpeggio・runtime prepare・conflict resolver のデフォルト拒否に関するテストカバレッジを追加
+- ピースローダーのテストカバレッジを大幅に拡充
+- プロジェクト設定・グローバル設定のテストカバレッジを追加
+- MCP サーバーヘルパー、ポリシー正規化、conflict resolver ヘルパーのリファクタリング
+- ドキュメント更新（レビューピース名の修正、ビルトインカタログ更新）
+- ビルド/lint/テスト品質ゲートの追加と E2E テスト環境の CLAUDECODE 環境変数分離
+- テスト契約チェックのビルトインファセット強化（review-test, write-tests-first, testing-review）
+- タスク auto-PR の E2E テストを追加
+
+## [0.32.2] - 2026-03-17
+
+### Added
+
+- 到達経路（Reachability）ファセットを追加: 新しい画面・機能を追加する際に、ルーティング・メニュー・ボタン等のエントリーポイントを同時に整備することを計画・実装・レビューの各段階で検証
+- 再取得ループ防止ファセットを追加: `useEffect` の依存配列に不安定な Context/Provider 関数参照を含めることで起きる無限ループを検出・防止するナレッジとポリシー
+- UIライブラリ統合ファセットを追加: サードパーティ UI コンポーネント（データグリッド、日付ピッカー等）導入時のバージョン互換性・実マウント検証のナレッジとポリシー
+- React ナレッジファセット (`react.md`) を新規追加: Effects の再実行制御、Context/Provider の値安定性に関する判断基準テーブル付き
+- デザイン計画ポリシー (`design-planning.md`) を新規追加: デザインリファレンスが存在する場合の要素インベントリ・スコープ決定の基準
+- フロントエンド専用プランフォーマット (`plan-frontend.md`) を新規追加: デザイン要素の Keep/Change 判定テーブルを含むプラン出力契約
+
+### Changed
+
+- フロントエンド系ピース（`frontend`, `frontend-mini`, `dual`, `dual-mini`, `dual-cqrs`, `dual-cqrs-mini`）の plan ムーブメントに `design-planning` ポリシーと `react` ナレッジを統合
+- フロントエンド系ピースのプランフォーマットを `plan` から `plan-frontend` に変更
+- `frontend` ピースの全ムーブメント（テスト、レビュー、修正等）に `react` ナレッジを追加
+
+### Internal
+
+- `@openai/codex-sdk` を 0.112.0 → 0.114.0 に更新
+- team leader worker pool の E2E テストを安定化
+
+## [0.32.1] - 2026-03-14
+
+### Fixed
+
+- `--pr` 経由のタスクで `autoPr` が無効になっていたため origin push がスキップされる問題を修正
+- PR レビューコメントの取得が `gh pr view` の `reviews.comments` に依存していたため、インラインコメントを取りこぼす問題を修正。GitHub REST API によるページネーション取得に変更 (#489)
+- config のパス指定で `~` チルダ展開が効かない問題を修正（`worktree_dir`、`*_cli_path`、`analytics.events_path` 等） (#496)
+- auto-commit 時に git hooks/filter がそのまま実行され、TAKT 管理下のコミットが意図しない hooks の影響を受ける問題を修正。デフォルトで無効化し、`allow_git_hooks` / `allow_git_filters` で opt-in に変更 (#503)
+- インタラクティブモードで初回入力時に不要な AI 呼び出しが発生していた問題を修正 (#504)
+- Cursor provider でプロンプト文字列が CLI オプションとして解釈される可能性がある問題を修正（`--` セパレータを追加） (#500)
+- snapshot ファイル名にムーブメント名がそのまま使われ、パストラバーサルが可能だった問題を修正 (#498)
+- `provider_options` の優先順位で、環境変数・プロジェクト設定がムーブメント定義より低くなっていた問題を修正（セキュリティ設定がムーブメントで上書きされないよう変更） (#497)
+- worktree パスの再利用時に、クローンベースディレクトリ外のパスが受け入れられる問題を修正 (#502)
+- terraform ピースから不要な強制 full パーミッションを削除 (#507)
+
+### Internal
+
+- テスト系ピース・ファセットの全面整備（e2e-test → audit-e2e、unit-test → audit-unit にリネーム、ナレッジ・ポリシー追加）
+- デザイン忠実度ポリシーの追加とフロントエンド系ピースへの統合
+- audit-security ピースの追加
+- ファセットデプロイメントのリファクタリング（templates ディレクトリの廃止、facets ディレクトリへの統合） (#505)
+- `isPathInside` ユーティリティを追加し、クローン削除・worktree 再利用のパス検証を強化
+- ループモニターの閾値調整とレビューポリシーの改善
+
+## [0.32.0] - 2026-03-09
+
+### Added
+
+- `takt export-codex` コマンド: ピース/ファセットを Codex スキルとしてエクスポート (`~/.agents/skills/takt/`) (#475)
+- `frontend` / `backend` / `backend-cqrs` ピースにテストファースト（`write_tests`）ムーブメントを追加し、レビューを2段階化（Stage 1: 構造・実装品質 → Stage 2: 安全性・品質保証）
+- セキュリティナレッジにログ・マスキングセクションを追加（パスワード露出、`toString()` によるフィールド漏洩の検出基準）
+- CQRS+ES ナレッジにマスタデータと CRUD の使い分けセクションを追加（6つの判断基準テーブル付き）
+- `/ci` コメントで PR の CI を手動トリガーするワークフローを追加
+- devcontainer で worktree クローン先の親ディレクトリが書き込み不可の場合に `.takt/worktrees/` へフォールバック
+- インタラクティブモードのアシスタントが設計判断を勝手にしないようポリシーを追加
+
+### Changed
+
+- BREAKING: ピース YAML の `instruction_template` フィールドを非推奨化。`instruction` に統一（後方互換あり、deprecated 警告を表示） (#476)
+- レビュー系ピースの命名規則を `review-{variant}` / `review-fix-{variant}` に統一
+- タスク分解の REJECT 基準をナレッジからポリシーに分離
+- faceted-prompting を npm パッケージ (`@anthropic-ai/faceted-prompting`) に移行し、内蔵コードを削除
+
+### Fixed
+
+- `takt run` の Slack 通知が当該 run で実行したタスクのみを送信するよう修正（従来は全タスクを通知していた）
+- `ProviderPermissionProfilesSchema` に `copilot` が欠落していた問題を修正 (#487)
+- PR fix フローで既存ブランチ存在時に `baseBranch` 検証をスキップするよう修正
+- `review-fix-takt-default` の fix 後フローを `takt-default` と統一
+- `write-tests-first` インストラクションからビルド検証手順を削除
+- `cc-resolve` ワークフローに `actions: write` パーミッションを追加
+
+### Internal
+
+- SDK 依存パッケージを最新化
+- `deploySkill` のコア処理を `deploySkillInternal` に抽出し、`deploySkillCodex` と共有
+- clone ブランチ解決をリモートブランチ対応に拡張（`localBranchExists` / `remoteBranchExists` に分離）
+- README の起動フローを整理し「タスクにつむ」を通常フローとして記載
+
+## [0.31.0] - 2026-03-06
+
+### Changed
+
+- `dual` ピースを大幅強化: テストファースト（`write_tests`）ムーブメント追加、`implement` を team_leader 化（FE/BE 分割）、レビューを2段階化（`reviewers_1`: arch/frontend/testing → `reviewers_2`: security/qa/requirements）
+- `takt-default-team-leader` ピースを `takt-default` に統合し削除。`takt-default` の `implement` を team_leader 化
+- `quality_gates` のペルソナ単位オーバーライドをサポート: `piece_overrides.personas.<name>.qualityGates` で特定ペルソナのムーブメントに品質ゲートを追加可能に (#472)
+- Status 型を `done` / `blocked` / `error` の3値に整理し、ステータスハンドリングを厳格化。`blocked` / `error` 時は即座に ABORT するよう変更 (#477)
+
+### Fixed
+
+- `git check-ref-format` コマンドから不要な `--` を削除し、ブランチ名の検証が正しく動作するよう修正 (#481)
+- `log_level` → `logging.level` の設定キー不整合を修正（E2E テスト全滅の原因）
+- Phase 3 ステータス判定が失敗した際に Phase 1 のルール評価にフォールバックするよう修正（従来はエラーで中断していた） (#474)
+- Parallel ムーブメントの Phase 3 判定失敗時も同様にフォールバック対応 (#474)
+- タスクリトライ・追加指示時のピース名取得元を `runInfo?.piece` から `task.data?.piece` に変更（worktree 内で `runInfo` が常に null になる問題を修正）
+
+### Internal
+
+- config 3層モデルの整理: `PersistedGlobalConfig` → `GlobalConfig` にリネーム、マイグレーション用フォールバック処理を削除、`persisted-global-config.ts` → `config-types.ts` にリネーム
+- supervisor ペルソナからインラインの知識・ポリシーをファセットファイルに分離
+- team leader の分解品質を改善するナレッジ（`task-decomposition.md`）とインストラクション（`dual-team-leader-implement.md`）を追加
+- `~/.takt/config.yaml` テンプレートに不足していた設定項目を追加
+- Provider Sandbox & Permission ガイドのドキュメントを拡充
+
+## [0.30.0] - 2026-03-05
+
+### Added
+
+- トレースレポートの自動生成: piece 実行完了時に movement の遷移・フェーズ・ルール評価結果を Markdown レポートとして `.takt/runs/` に自動出力。`logging.trace: true` で全文モード、デフォルトは redacted モード (#467)
+- 使用量イベントログ: プロバイダー呼び出しごとのトークン使用量を NDJSON 形式で記録。`logging.usage_events: true` で有効化 (#470)
+- タスクリトライ時のピース再利用確認: `takt list` からリトライ・追加指示する際に、前回と同じピースを使うか選び直すかを選択可能に (#468)
+
+### Changed
+
+- BREAKING: `takt switch` コマンドを削除。ピース選択はインタラクティブモード起動時（`takt`）に毎回行う方式に変更 (#465)
+- Claude プロバイダーの `allowed_tools` をビルトインピースの YAML 定義からエグゼキューター側に移動し、ピース YAML の簡素化と保守性を向上 (#469)
+- 設定構造をリファクタリング: `globalConfig.ts` を `globalConfigCore.ts`・`globalConfigAccessors.ts`・`globalConfigResolvers.ts`・`globalConfigSerializer.ts` に分割。プロジェクトローカル設定（`.takt/config.yaml`）のフォールバック優先度を明確化 (#460)
+- observability モジュールを `core/logging/` に再編成: `providerEventLogger` と `usageEventLogger` を統一的なログ基盤として整理 (#466)
+- レビュアー全体に `coder-decisions.md` の参照を追加し、コーダーの設計判断を考慮したレビューで誤検知を抑制
+- レビュー↔修正ループの収束を支援: レポート履歴の参照、ループモニター、修正方針のガイドラインを整備
+
+### Fixed
+
+- runtime 環境の `XDG_CONFIG_HOME` 上書きで `gh` CLI の認証が失敗する問題を修正。`GH_CONFIG_DIR` を元の設定から保持するよう変更
+- `.takt/config.yaml` に `runtime.prepare` を記述するとエラーになる問題を修正（プロジェクトレベルでの runtime 設定を許可） (#464)
+- インタラクティブモードで iteration limit 到達時にプロンプトが表示されず、exceeded 状態が保持されない問題を修正
+- PR 作成失敗時のタスクステータスを `failed` から `pr_failed` に分離し、実行成功だが PR 作成のみ失敗したケースを区別可能に
+- リトライ時にタスクにピース情報が引き継がれるよう修正
+- `.gitignore` の `.takt/` ディレクトリ ignore を削除し `.takt/.gitignore` に委譲（プロジェクト設定ファイルの追跡を可能に）
+- CI: push トリガーから `takt/**` を削除し二重実行を防止
+- `cc-resolve` ワークフローで push 後に CI を自動トリガーするよう修正
+
+### Internal
+
+- deprecated config マイグレーション処理を削除
+- プロジェクトローカル設定の優先度に関する統合テストを追加
+- テストヘルパーとテストセットアップの改善
+
+## [0.29.0] - 2026-03-04
+
+### Added
+
+- レビュー＋修正ループピース群を追加: `review-fix`（多角レビュー）、`frontend-review-fix`、`backend-review-fix`、`dual-review-fix`、`dual-cqrs-review-fix`、`backend-cqrs-review-fix` および対応するレビュー専用ピース群を追加。コードレビューと自動修正を反復するワークフロー
+- `takt-default-review-fix` ピースを追加: TAKT 自己開発向けのレビュー＋修正ループワークフロー
+- `quality_gates` のグローバル/プロジェクトレベルオーバーライドをサポート: `~/.takt/config.yaml` および `.takt/config.yaml` の `piece_overrides.quality_gates` でビルトインピースの品質ゲートを上書き可能に (#384)
+- タスクの `base_branch` 設定: `takt add` 時に現在のブランチを base_branch として記録し、タスク実行時にそのブランチから分岐するよう設定可能に (#455)
+- プロバイダー設定の統一: `.takt/config.yaml` で `provider` ブロックに `type`/`model`/プロバイダー固有オプション（`network_access` 等）をまとめて記述可能に (#457)
+- ワーカープール超過時のリキュー: タスク実行がワーカー上限を超えた場合、タスクを自動的に再キューイングするよう対応 (#366)
+- `--pr` インタラクティブモードで `create_issue` アクションを除外し、`save_task` 時に PR のブランチ名を `base_branch` として自動設定
+- team_leader の `decomposeTask`/`requestMoreParts`/Phase 3 ステータス判定のプロバイダーイベントをロギング: `provider-events.jsonl` に記録されるようになり、デバッグ・分析が可能に
+
+### Fixed
+
+- `export-cc` で `facets/` のサブディレクトリ構造（`personas/`、`policies/` 等）が出力先に再現されなかった問題を修正 (#8dcb23b)
+- `cc-resolve` コマンドがコンフリクト解決後にマージコミットを生成するよう修正 (#1b1f758)
+- グローバル設定 (`~/.takt/config.yaml`) の `piece` フィールドがピース解決チェーンで無視されるバグを修正 (#458)
+- Codex プロバイダーでプロバイダー優先のパーミッションモード解決が機能しない問題と EPERM エラーの E2E テストを追加 (#d2b48fd)
+- レビューコメントがない PR で `--pr` を使用した際にエラーになる問題を修正
+- `--auto-pr`/`--draft` オプションをパイプラインモード専用に制限（インタラクティブモードでの誤用を防止）
+- team_leader のストリーミングでバウンダリの先行フラッシュによる断片化を修正 (#769bd87, #bddb66f)
+- team_leader のエラーメッセージが空文字列になるバグを修正 (#52968ac)
+- `decomposeTask`/`requestMoreParts` の `maxTurns` を 2 から 4 に増加（複雑なタスク分解でタイムアウトしていた問題を緩和）
+- Copilot プロバイダーのクライアント実装のバグを修正 (#434)
+
+### Internal
+
+- E2E プロバイダー別テストをコンフィグレベル（`vitest.config.e2e.provider.ts`）で振り分けるよう変更。テストファイル内の `skip` ロジックを廃止し、JSON レポート出力を追加
+- 共有ノーマライザを `configNormalizers.ts` に抽出してプロバイダー設定解析を整理
+- `agent-usecases`/`schema-loader` を移動し `pieceExecution` の責務を分割
+- `check:release` で全プロバイダー（claude/codex/opencode）の E2E を実行するよう変更
+- CI: PR と push の重複実行を concurrency グループで抑制
+- CI: feature ブランチへの push と手動実行に対応
+
+## [0.28.1] - 2026-03-02
+
+### Changed
+
+- BREAKING: `expert` / `expert-mini` / `expert-cqrs` / `expert-cqrs-mini` ピースを `dual` / `dual-mini` / `dual-cqrs` / `dual-cqrs-mini` にリネーム。カスタマイズしている場合はピース名の更新が必要
+- `default-mini` / `default-test-first-mini` ピースを `default` に統合。`default` ピースが「テスト優先モード」を内包するよう拡張
+- `coding-pitfalls` ナレッジの主要項目を `coding` ポリシーに移動し、ポリシーとして実際に適用されるよう強化
+- `implement` / `plan` インストラクションにセルフチェック・コーダー指針を追加
+
+### Removed
+
+- `passthrough` ピースを削除
+- `structural-reform` ピースを削除
+
+### Internal
+
+- `expert-supervisor` ペルソナを `dual-supervisor` にリネーム
+- ビルトインカタログに不足していた `terraform`、`takt-default` 系、`deep-research` を追加
+- カテゴリ設定に `deep-research` を追加
+- 全ドキュメントに `copilot` プロバイダーの説明を追加し、Claude Code 寄りの記述をプロバイダー中立に修正
+
+## [0.28.0] - 2026-03-02
+
+### Added
+
+- GitHub Copilot CLI プロバイダーを追加: `copilot` プロバイダーとして GitHub Copilot CLI を利用可能に。セッション継続、パーミッション制御（readonly/edit/full）に対応。`copilotCliPath` / `TAKT_COPILOT_CLI_PATH` で CLI パスを指定、`copilotGithubToken` / `TAKT_COPILOT_GITHUB_TOKEN` で認証トークンを設定 (#425)
+- `--pr` オプションを追加: PR のレビューコメントを取得してタスクとして実行。パイプラインモードとインタラクティブモードの両方で利用可能 (#421)
+- `takt add --pr N` で PR のレビューコメントをタスクとして追加可能に。PR のブランチ名で worktree を自動作成し、レビュー指摘の修正タスクとしてキューイング (#426)
+- `takt list` に「Pull from remote」アクションを追加: リモートの変更を worktree に取り込み、再プッシュ可能に (#395)
+- プロジェクト単位の CLI パス設定: `.takt/config.yaml` で `claudeCliPath` / `cursorCliPath` / `codexCliPath` / `copilotCliPath` をプロジェクトごとに設定可能に (#413)
+- インタラクティブモードのスラッシュコマンドを行末でも認識可能に（例: `タスクの内容 /go`）(#406)
+- takt-default / takt-default-team-leader ビルトインピースを追加（TAKT 自己開発用のワークフロー定義）
+- TAKT ナレッジファセット（`takt.md`）を追加: TAKT のアーキテクチャとコード規約を体系化
+- ai-antipattern ポリシーに冗長な条件分岐パターン検出を追加: 同一関数を if/else で呼び分けるコードを検出し、三項演算子やスプレッド構文での統一を促す
+
+### Fixed
+
+- 不正な `tasks.yaml` を検出した場合、ファイルを削除せず保持してエラーメッセージで停止するよう修正 (#418)
+- shallow clone リポジトリで worktree 作成が失敗する問題を修正: `--reference` 付きクローンが失敗した場合に通常クローンへフォールバック (#376, #409)
+- グローバル/プロジェクト設定の `model` がモデルログに反映されない不具合を修正 (#417)
+- fork PR レビュー時に `GH_REPO` を設定して正しいリポジトリの issue を参照するよう修正
+- takt-review ワークフローの PR コメント投稿ステップにも `GH_REPO` を設定
+
+### Internal
+
+- `resolveConfigValue` の不要な `defaultValue` 引数を削除し、設定解決ロジックを簡素化 (#391)
+- PRコメント `/resolve` でコンフリクト解決・レビュー指摘修正を行う GitHub Actions ワークフロー（cc-resolve）を追加
+- takt-review ワークフローを `pull_request_target` に変更し、fork PR でもシークレットを利用可能に
+- CI に `ready_for_review` / `reopened` トリガーを追加
+- CONTRIBUTING にレビューモードの例を追加、日本語版（`CONTRIBUTING.ja.md`）を追加
+
+## [0.28.0-alpha.1] - 2026-02-28
+
+### Added
+
+- GitHub Copilot CLI プロバイダーを追加: `copilot` プロバイダーとして GitHub Copilot CLI を利用可能に。セッション継続、パーミッション制御（readonly/edit/full）に対応。`copilotCliPath` / `TAKT_COPILOT_CLI_PATH` で CLI パスを指定、`copilotGithubToken` / `TAKT_COPILOT_GITHUB_TOKEN` で認証トークンを設定 (#425)
+- `--pr` オプションを追加: PR のレビューコメントを取得してタスクとして実行。パイプラインモードとインタラクティブモードの両方で利用可能 (#421)
+- `takt add --pr N` で PR のレビューコメントをタスクとして追加可能に。PR のブランチ名で worktree を自動作成し、レビュー指摘の修正タスクとしてキューイング (#426)
+- `takt list` に「Pull from remote」アクションを追加: リモートの変更を worktree に取り込み、再プッシュ可能に (#395)
+- プロジェクト単位の CLI パス設定: `.takt/config.yaml` で `claudeCliPath` / `cursorCliPath` / `codexCliPath` / `copilotCliPath` をプロジェクトごとに設定可能に (#413)
+- インタラクティブモードのスラッシュコマンドを行末でも認識可能に（例: `タスクの内容 /go`）(#406)
+- takt-default / takt-default-team-leader ビルトインピースを追加（TAKT 自己開発用のワークフロー定義）
+- TAKT ナレッジファセット（`takt.md`）を追加: TAKT のアーキテクチャとコード規約を体系化
+- ai-antipattern ポリシーに冗長な条件分岐パターン検出を追加: 同一関数を if/else で呼び分けるコードを検出し、三項演算子やスプレッド構文での統一を促す
+
+### Fixed
+
+- 不正な `tasks.yaml` を検出した場合、ファイルを削除せず保持してエラーメッセージで停止するよう修正 (#418)
+- shallow clone リポジトリで worktree 作成が失敗する問題を修正: `--reference` 付きクローンが失敗した場合に通常クローンへフォールバック (#376, #409)
+- グローバル/プロジェクト設定の `model` がモデルログに反映されない不具合を修正 (#417)
+- fork PR レビュー時に `GH_REPO` を設定して正しいリポジトリの issue を参照するよう修正
+- takt-review ワークフローの PR コメント投稿ステップにも `GH_REPO` を設定
+
+### Internal
+
+- `resolveConfigValue` の不要な `defaultValue` 引数を削除し、設定解決ロジックを簡素化 (#391)
+- PRコメント `/resolve` でコンフリクト解決・レビュー指摘修正を行う GitHub Actions ワークフロー（cc-resolve）を追加
+- takt-review ワークフローを `pull_request_target` に変更し、fork PR でもシークレットを利用可能に
+- CI に `ready_for_review` / `reopened` トリガーを追加
+- CONTRIBUTING にレビューモードの例を追加、日本語版（`CONTRIBUTING.ja.md`）を追加
+
+## [0.27.0] - 2026-02-28
+
+### Added
+
+- Cursor Agent CLI プロバイダーを追加: `cursor-agent` CLI を介して Cursor を AI プロバイダーとして利用可能に。API キー（`TAKT_CURSOR_API_KEY` / `cursor_api_key`）または `cursor-agent login` セッションで認証、JSON 出力解析、セッション継続（`--resume`）、モデル指定（`--model`）、パーミッション制御（`full` → `--force`）に対応 (#403)
+- Cursor プロバイダーの E2E テスト設定を追加（`vitest.config.e2e.cursor.ts`、`npm run test:e2e:cursor`）
+
+### Fixed
+
+- Phase 1 が error または blocked を返した場合に Phase 2（レポート出力）をスキップするよう修正。Phase 1 失敗時に不要なレポート生成が実行される問題を解消
+- Codex 互換性のため、runtime prepare で Gradle デーモンを無効化するよう修正
+
+### Internal
+
+- エージェント/カスタムペルソナのドキュメントを整合
+
+## [0.26.0] - 2026-02-27
+
+### Added
+
+- TeamLeader に refill threshold と動的パート追加を導入: 実行中のパートが `refill_threshold` 以下になると、リーダーが完了済みパートの結果を評価して追加パートを動的に生成。`max_parts` は同時並行数、`refill_threshold` で追加計画のタイミングを制御（最大合計 20 パートまで）
+- deep-research ピースの dig ムーブメントに `team_leader` 設定を追加し、リサーチの並列実行が可能に
+- TeamLeader が Phase 2（レポート出力）/ Phase 3（ステータス判定）を通常ムーブメントと同様にサポート（`applyPostExecutionPhases` の共通化）
+- ParallelLogger が動的なサブムーブメント追加に対応（`addSubMovement`）し、TeamLeader の動的パート追加時にもストリーミング出力を表示
+- `LineTimeSliceBuffer` を導入し、並列ストリーミング出力のバッファリングを時間スライスベースで最適化
+- プロジェクト設定（`.takt/config.yaml`）で `model` 指定をサポート
+
+### Changed
+
+- BREAKING: カスタムエージェント定義（`~/.takt/personas/*.md`）の `provider` / `model` を解釈しない方針とし、エージェントのプロバイダー・モデルはピース側の解決ロジック（CLI → persona_providers → ステップ → ローカル → グローバル）に統一 (#390)
+- エージェントの provider/model 解決ロジックを `resolveAgentProviderModel` に一元化し、ムーブメント解決と同じ優先順位チェーンを使用するよう変更 (#386)
+- `movement:start` イベントが `providerInfo` を含むよう変更し、表示側でのプロバイダー再解決を不要に (#390)
+- `takt list` の「Sync with root」を「Merge from root」にリネーム (#394)
+- インタラクティブモードの要約 AI がセッション非継承で実行されるよう修正し、会話コンテキストの汚染を防止 (#368)
+- interactive policy のガイドラインを改善: ユーザーが「自分で調べて」と指示した場合と、ピースへの指示作成を区別するルールを明確化
+
+### Fixed
+
+- default / default-test-first-mini ピースの `write_tests` ムーブメントで、テスト対象が未実装の場合にスキップして implement へ進むルールを追加（従来は ABORT になっていた）(#396)
+- `takt add` の GitHub Issue タイトル抽出を改善: Markdown 見出し（h1-h3）を優先的にタイトルとして使用するよう変更（従来は先頭行がそのまま使われていた）(#368)
+- quiet モードの要約 AI がセッションを引き継がない問題を修正 (#368)
+- `repertoire add` の `gh api` 呼び出しにバッファサイズ上限（100MB）を設定し、大きなリポジトリでのバッファオーバーフローを防止
+- E2E テストで `gh` ユーザー検索が無効な場合にローカルリポジトリへフォールバックするよう修正
+
+### Internal
+
+- TeamLeaderRunner をリファクタリング: 実行ロジック（`team-leader-execution.ts`）、集約（`team-leader-aggregation.ts`）、共通ユーティリティ（`team-leader-common.ts`）、ストリーミング（`team-leader-streaming.ts`）に分離
+- `more-parts.json` スキーマと `loadMorePartsSchema` ローダーを追加
+- AGENTS.md を更新（プロジェクト構成とガイドラインの改訂）
+- テスト拡充: provider/model 解決マトリクス、TeamLeader refill threshold / worker pool / aggregation / execution、OptionsBuilder、stream-buffer、conversationLoop resume、quietMode session、createIssueFromTask、schema-loader
+
+## [0.25.0] - 2026-02-26
+
+### Added
+
+- Terraform/AWS ピース: IaC 開発用の完全なピースとファセット一式を追加。plan → implement → 並列3レビュー（architect/QA/security）→ supervise → complete の15ムーブメント構成（EN/JA）
+- GitProvider 抽象化: Git/GitHub 操作を `GitProvider` インターフェースに統一し、将来の複数 Git プロバイダー対応の基盤を構築 (#375)
+- プロジェクト設定で submodule の自動取得をサポート: `submodules: all` または `submodules: [path1, path2]` で指定可能に (#387)
+- `takt add` で GitHub Issue 作成時にラベルをインタラクティブに選択可能に (#377, #111)
+- deep-research ピースにデータ保存・レポート出力機能を追加（dig/analyze ムーブメントに Write・Bash ツール許可、supervise に research-report 出力契約）
+- GitHub Discussions・Discord・X への一斉アナウンス GitHub Actions ワークフローを追加
+
+### Changed
+
+- default ピースをテスト先行開発構成に変更: plan の後に `write_tests` ムーブメントを追加し、テストを先に書いてから実装する流れに。並列レビューに testing-review を追加（3→4 レビュアー）。レポートファイル名をセマンティック命名に統一（`00-plan.md` → `plan.md` 等）
+- sync with root をピースエンジン経由からプロバイダー抽象化を利用した単発エージェント呼び出しに簡素化。コンフリクト解決プロンプトをテンプレートファイル化（EN/JA 分離）
+
+### Fixed
+
+- lineEditor でサロゲートペア（絵文字等）のカーソル位置がずれる問題を修正。Ctrl+J による改行挿入を追加
+- `--task` オプションでの直接実行時に tasks.yaml へ不要な記録がされる問題を修正
+- `--task` でワークツリー作成時は tasks.yaml に記録するよう修正（`takt list` でのブランチ管理に必要）
+- Provider resolution: removed implicit fallback to `claude` and switched to fail-fast when provider cannot be resolved (#386)
+- Provider resolution: unified display and execution provider/model resolution via `movement:start` event providerInfo, ensuring displayed provider always matches execution provider (#390)
+- E2E テスト config-priority の不安定性を修正 (#388)
+
+### Internal
+
+- GitProvider 抽象化に伴うテスト追加（github-provider, taskGit）と既存テストのインポート更新
+- CLAUDE.md 更新
+
+## [0.24.0] - 2026-02-24
+
+### Added
+
+- AskUserQuestion support: AI agents can now ask interactive questions during execution with single-select, multi-select, and free-text input via TTY UI; automatically denied during piece execution to maintain agent autonomy (#161, #369)
+- `review` builtin piece with 3-mode auto-detection: automatically selects PR mode (by PR number), branch mode (by branch name), or working diff mode (by free text) for multi-perspective parallel review
+- `testing-reviewer` and `requirements-reviewer` builtin personas for specialized review perspectives
+- `testing` policy: integration test requirement criteria (3+ module data flow, state merging into workflows, option propagation through call chains)
+- `gather-review` instruction and `review-gather` output contract for the new review piece gather movement
+- `requirements-review` instruction and output contract for requirements-focused review
+- `testing-review` output contract for testing-focused review
+- `settingSources: ['project']` in SDK options: delegates CLAUDE.md loading to the Claude SDK for proper project-level settings resolution
+
+### Changed
+
+- **BREAKING:** `review-only` piece renamed to `review`; `review-fix-minimal` piece removed — users referencing these piece names must update to `review`
+- `write-tests-first` instruction now includes integration test decision criteria instead of a generic "Write E2E tests if appropriate"
+
+### Fixed
+
+- Planner persona: added bug fix propagation check rule (grep for same pattern in related files) and prohibited deferring decidable questions to Open Questions
+
+### Internal
+
+- Docs: fixed music metaphor origin description, catalog gaps, broken links, orphaned documents, event names, API Key references, eject descriptions, removed stale personas section map from YAML example, aligned legacy terminology with current codebase
+- New test suites: `StreamDisplay`, `ask-user-question-handler`, `pieceExecution-ask-user-question`, `review-piece`, `opencode-client-cleanup`
+- Removed legacy `review-only-piece` test and `loadProjectContext` from session module (CLAUDE.md loading now delegated to SDK)
+
+## [0.23.0] - 2026-02-23
+
+### Added
+
+- `default-test-first-mini` builtin piece for test-first development workflow
+- `auto_fetch` global config: opt-in remote fetch before cloning to keep clones up-to-date (`default: false`)
+- `base_branch` config (global/project): specify the base branch for clone creation (defaults to remote default branch)
+- `model` project config: override model at the project level (`.takt/config.yaml`)
+- `concurrency` project config: set parallel task count per project for `takt run`
+- `--create-worktree` support in pipeline mode for worktree-based execution
+- `skipTaskList` option: interactive "Execute" action skips adding to `tasks.yaml`
+- `takt list` now displays GitHub Issue numbers alongside task names
+- Retry failed tasks now offers to reuse the previous piece before prompting piece selection
+- Pipeline mode Slack notifications: sends run summary with task details, duration, branch, and PR URL
+- CI workflow: lint, test, and e2e:mock checks run automatically on PRs (#364)
+
+### Changed
+
+- Provider/model resolution unified via `resolveProviderModelCandidates()` — single resolution function used in both `AgentRunner` and `resolveMovementProviderModel`
+- Pipeline execution refactored into thin orchestrator (`execute.ts`) + step implementations (`steps.ts`)
+- Clone directory default changed from `takt-worktree` (singular) to `takt-worktrees` (plural) with auto-migration of legacy directory
+- PR titles now include issue number prefix (e.g., `[#6] Fix the bug`)
+- Task status now reflects PR creation failure — previously only piece execution success was tracked
+- `auto-tag.yml` tags PR head SHA instead of merge commit for correct hotfix code publishing
+- Session reader falls back to JSONL file scanning when `sessions-index.json` is missing or invalid
+- `ProjectLocalConfig` type normalized to camelCase (`auto_pr`→`autoPr`, `draft_pr`→`draftPr`) — YAML snake_case preserved
+- `getLocalLayerValue` simplified from switch-case to dynamic property lookup
+
+### Fixed
+
+- `repertoire add` pipe stdin: multiple `confirm()` calls failed when reading from piped stdin due to readline destroying buffered lines (#334)
+- Movement provider override precedence in `AgentRunner`: step provider was incorrectly overridden by global config
+- Project-level `model` config was silently ignored — `getLocalLayerValue` was missing the `model` case
+- PR creation failure now properly propagated as task failure with error message (#345)
+- Claude session resume candidates now fall back to JSONL file scanning when `sessions-index.json` is unavailable
+
+### Internal
+
+- CI: PR checks for lint, test, e2e:mock (`ci.yml`)
+- Expanded e2e test coverage for repertoire (#364)
+- New test suites: clone, config, postExecution, session-reader, selectAndExecute-skipTaskList, taskStatusLabel, pipelineExecution
+- Refactored: project config case normalization (#358), clone manager (#359), pipeline steps extraction, confirm pipe reader singleton, provider resolution (#362)
+
+## [0.22.0] - 2026-02-22
+
+### Added
+
+- **Repertoire package system** (`takt repertoire add/remove/list`): Import and manage external TAKT packages from GitHub — `takt repertoire add github:{owner}/{repo}@{ref}` downloads packages to `~/.takt/repertoire/` with atomic installation, version compatibility checks, lock files, and package content summary before confirmation
+- **@scope references in piece YAML**: Facet references now support `@{owner}/{repo}/{facet-name}` syntax to reference facets from installed repertoire packages (e.g., `persona: @nrslib/takt-fullstack/expert-coder`)
+- **4-layer facet resolution**: Upgraded from 3-layer (project → user → builtin) to 4-layer (package-local → project → user → builtin) — repertoire package pieces automatically resolve their own facets first
+- **Repertoire category in piece selection**: Installed repertoire packages automatically appear as subcategories under a "repertoire" category in the piece selection UI
+- **Build gate in implement/fix instructions**: `implement` and `fix` builtin instructions now require build (type check) verification before test execution
+- **Repertoire package documentation**: Added comprehensive docs for the repertoire package system ([en](./docs/repertoire.md), [ja](./docs/repertoire.ja.md))
+
+### Changed
+
+- **BREAKING: Facets directory restructured**: Facet directories moved under a `facets/` subdirectory at all levels — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`, `~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`, `.takt/{facetType}/` → `.takt/facets/{facetType}/`. Migration: move your custom facet files into the new `facets/` subdirectory
+- Contract string hardcoding prevention rule added to coding policy and architecture review instruction
+
+### Fixed
+
+- Override piece validation now includes repertoire scope via the resolver
+- `takt export-cc` now reads facets from the new `builtins/{lang}/facets/` directory structure
+- `confirm()` prompt now supports piped stdin (e.g., `echo "y" | takt repertoire add ...`)
+- Suppressed `poll_tick` debug log flooding during iteration input wait
+- Piece resolver `stat()` calls now catch errors gracefully instead of crashing on inaccessible entries
+
+### Internal
+
+- Comprehensive repertoire test suite: atomic-update, repertoire-paths, file-filter, github-ref-resolver, github-spec, list, lock-file, pack-summary, package-facet-resolution, remove-reference-check, remove, takt-repertoire-config, tar-parser, takt-repertoire-schema
+- Added `src/faceted-prompting/scope.ts` for @scope reference parsing, validation, and resolution
+- Added scope-ref tests for the faceted-prompting module
+- Added `inputWait.ts` for shared input-wait state to suppress worker pool log noise
+- Added piece-selection-branches and repertoire e2e tests
+
+## [0.21.0] - 2026-02-20
+
+### Added
+
+- **Slack task notification enhancements**: Extended Slack webhook notifications with richer task context and formatting (#316)
+- **`takt list --delete-all` option**: Delete all tasks at once from the task list (#322)
+- **`--draft-pr` option**: Create pull requests as drafts via `--draft-pr` flag (#323)
+- **`--sync-with-root` option**: Sync worktree branch with root repository changes (#325)
+- **Model per persona-provider**: Allow specifying model overrides at the persona-provider level (#324)
+- **Analytics project config and env override**: Analytics settings can now be configured per-project and overridden via environment variables
+- **CI dependency health check**: Periodic CI check to detect broken dependency packages
+
+### Changed
+
+- **Config system overhaul**: Replaced `loadConfig()` bulk merge with per-key `resolveConfigValue()` resolution — global < piece < project < env priority with source tracking and `OptionsBuilder` merge direction control (#324)
+
+### Fixed
+
+- **Retry command scope and messaging**: Fixed retry command to show correct available range and guidance text
+- **Retry task `completed_at` leak**: Clear `completed_at` when moving a failed task back to running via `startReExecution`, preventing Zod validation errors
+- **OpenCode multi-turn hang**: Removed `streamAbortController.signal` from OpenCode server startup so subsequent turns no longer hang; restored `sessionId` carry-over for multi-turn conversations
+- **Romaji conversion stack overflow**: Prevented stack overflow on long task names during romaji conversion
+
+## [0.20.1] - 2026-02-20
+
+### Fixed
+
+- Pin `@opencode-ai/sdk` to `<1.2.7` to fix broken v2 exports that caused `Cannot find module` errors on `npm install -g takt` (#329)
+
+## [0.20.0] - 2026-02-19
+
+### Added
+
+- **Faceted Prompting module** (`src/faceted-prompting/`): Standalone library for facet composition, resolution, template rendering, and truncation — zero dependencies on TAKT internals. Includes `DataEngine` interface with `FileDataEngine` and `CompositeDataEngine` implementations for pluggable facet storage
+- **Analytics module** (`src/features/analytics/`): Local-only review quality metrics collection — event types (review findings, fix actions, movement results), JSONL writer with date-based rotation, report parser, and metrics computation
+- **`takt metrics review` command**: Display review quality metrics (re-report counts, round-trip ratio, resolution iterations, REJECT counts by rule, rebuttal resolution ratio) with configurable time window (`--since`)
+- **`takt purge` command**: Purge old analytics event files with configurable retention period (`--retention-days`)
+- **`takt reset config` command**: Reset global config to builtin template with automatic backup of the existing config
+- **PR duplicate prevention**: When a PR already exists for the current branch, push and comment on the existing PR instead of creating a duplicate (#304)
+- Retry mode now positions the cursor on the failed movement when selecting which movement to retry
+- E2E tests for run-recovery and config-priority scenarios
+
+### Changed
+
+- **README overhaul**: Compressed from ~950 lines to ~270 lines — details split into dedicated docs (`docs/configuration.md`, `docs/cli-reference.md`, `docs/task-management.md`, `docs/ci-cd.md`, `docs/builtin-catalog.md`) with Japanese equivalents. Redefined product concept around 4 value axes: batteries included, practical, reproducible, multi-agent
+- **Config system refactored**: Unified configuration resolution to `resolveConfigValue()` and `loadConfig()`, eliminating scattered config access patterns across the codebase
+- **`takt config` command removed**: Replaced by `takt reset config` for resetting to defaults
+- Builtin config templates refreshed with updated comments and structure
+- `@anthropic-ai/claude-agent-sdk` updated to v0.2.47
+- Instruct mode prompt improvements for task re-instruction
+
+### Fixed
+
+- Fixed issue where builtin piece file references used absolute path instead of relative (#304)
+- Removed unused imports and variables across multiple files
+
+### Internal
+
+- Unified `loadConfig`, `resolveConfigValue`, piece config resolution, and config priority paths
+- Added E2E tests for config priority and run recovery scenarios
+- Added `postExecution.test.ts` for PR creation flow testing
+- Cleaned up unused imports and variables
+
+## [0.19.0] - 2026-02-18
+
+### Added
+
+- Dedicated retry mode for failed tasks — conversation loop with failure context (error details, failed movement, last message), run session data, and piece structure injected into the system prompt
+- Dedicated instruct system prompt for completed/failed task re-instruction — injects task name, content, branch changes, and retry notes directly into the prompt instead of using the generic interactive prompt
+- Direct re-execution from `takt list` — "execute" action now runs the task immediately in the existing worktree instead of only requeuing to pending
+- `startReExecution` atomic task transition — moves a completed/failed task directly to running status, avoiding the requeue → claim race condition
+- Worktree reuse in task execution — reuses existing clone directory when it's still on disk, skipping branch name generation and clone creation
+- Task history injection into interactive and summary system prompts — completed/failed/interrupted task summaries are included for context
+- Previous run reference support in interactive and instruct system prompts — users can reference logs and reports from prior runs
+- `findRunForTask` and `getRunPaths` helpers for automatic run session lookup by task content
+- `isStaleRunningTask` process helper extracted from TaskLifecycleService for reuse
+
+### Changed
+
+- Interactive module split: `interactive.ts` refactored into `interactive-summary.ts`, `runSelector.ts`, `runSessionReader.ts`, and `selectorUtils.ts` for better cohesion
+- `requeueTask` now accepts generic `allowedStatuses` parameter instead of only accepting `failed` tasks
+- Instruct/retry actions in `takt list` use the worktree path for conversation and run data lookup instead of the project root
+- `save_task` action now requeues the task (saves for later execution), while `execute` action runs immediately
+
+### Internal
+
+- Removed `DebugConfig` from models, schemas, and global config — simplified to verbose mode only
+- Added stdin simulation test helpers (`stdinSimulator.ts`) for E2E conversation loop testing
+- Added comprehensive E2E tests for retry mode, interactive routes, and run session injection
+- Added `check:release` npm script for pre-release validation
+
+## [0.18.2] - 2026-02-18
+
+### Added
+
+- Added `codex_cli_path` global config option and `TAKT_CODEX_CLI_PATH` environment variable to override the Codex CLI binary path used by the Codex SDK (#292)
+  - Supports strict validation: absolute path, file existence, executable permission, no control characters
+  - Priority: `TAKT_CODEX_CLI_PATH` env var > `codex_cli_path` in config.yaml > SDK vendored binary
+
+## [0.18.1] - 2026-02-18
+
+### Added
+
+- Added multi-tenant data isolation section and authorization-resolver consistency code examples to security knowledge
+- Added "prefer project scripts" rule to coding policy — detects direct tool invocation (e.g., `npx vitest`) when equivalent npm scripts exist
+
+## [0.18.0] - 2026-02-17
+
+### Added
+
+- **`deep-research` builtin piece**: Multi-angle research workflow with four steps — plan, deep-dive, analyze, and synthesize
+- Project-level `.takt/` facets (pieces, personas, policies, knowledge, instructions, output-contracts) are now version-controllable (#286)
+- New research facets added: research policy, knowledge, comparative-analysis knowledge, dedicated persona, and instructions
+
+### Changed
+
+- Refactored the `research` piece — separated rules and knowledge embedded in the persona into policy, knowledge, and instruction files, conforming to the faceted design
+- Added knowledge/policy references to existing pieces (expert, expert-cqrs, backend, backend-cqrs, frontend)
+
+### Fixed
+
+- Fixed a bug where facet directories were not tracked because `.takt/` path prefix was written with `.takt/` prefix in the `.takt/.gitignore` template (dotgitignore)
+
+### Internal
+
+- Created knowledge facet style guide (`KNOWLEDGE_STYLE_GUIDE.md`)
+- Added regression tests for dotgitignore patterns
+
+## [0.17.3] - 2026-02-16
+
+### Added
+
+- Added API client generation consistency rules to builtin AI anti-pattern policy and frontend knowledge — detects handwritten clients mixed into projects where generation tools (e.g., Orval) exist
+
+### Fixed
+
+- Fixed EPERM crash when releasing task store locks — replaced file-based locking with in-memory guard
+
+### Internal
+
+- Unified vitest configuration for e2e tests and added `forceExit` option to prevent zombie workers
+
+## [0.17.2] - 2026-02-15
+
+### Added
+
+- **`expert-mini` and `expert-cqrs-mini` pieces**: Lightweight variants of Expert pieces — plan → implement → parallel review (AI anti-pattern + supervisor) → fix workflow
+- Added new pieces to "Mini" and "Expert" piece categories
+
+### Fixed
+
+- Fixed an error being thrown when permission mode could not be resolved — now falls back to `readonly`
+
+## [0.17.1] - 2026-02-15
+
+### Changed
+
+- Changed `.takt/.gitignore` template to allowlist approach — ignores all files by default and tracks only `config.yaml`. Prevents ignore gaps when new files are added
+
+## [0.17.0] - 2026-02-15
+
+### Added
+
+- **Mini piece series**: Added `default-mini`, `frontend-mini`, `backend-mini`, `backend-cqrs-mini` — lightweight development pieces with parallel review (AI anti-pattern + supervisor) as successors to `coding`/`minimal`
+- Added "Mini" category to piece categories
+- **`supervisor-validation` output contract**: Requirements Fulfillment Check table format that presents code evidence per requirement
+- **`getJudgmentReportFiles()`**: Phase 3 status judgment target reports can now be filtered via `use_judge` flag
+- Added `finding_id` tracking to output contracts (new/persists/resolved sections for tracking findings across iterations)
+
+### Changed
+
+- **BREAKING: Removed `coding` and `minimal` pieces** — replaced by the mini piece series. Migration: `coding` → `default-mini`, `minimal` → `default-mini`
+- **BREAKING: Unified output contract to item format** — `use_judge` (boolean) and `format` (string) fields are now required; `OutputContractLabelPath` (label:path format) is removed
+- Moved runtime environment directory from `.runtime` to `.takt/.runtime`
+- Enhanced supervisor requirements verification: extracts requirements individually and verifies one-by-one against code (file:line) — "roughly complete" is no longer valid grounds for APPROVE
+
+### Fixed
+
+- Added retry mechanism for deleting clone/worktree directories (`maxRetries: 3`, `retryDelay: 200`) — reduces transient deletion failures caused by file locks
+
+### Internal
+
+- Removed `review-summary` output contract (consolidated into `supervisor-validation`)
+- Updated all builtin pieces, e2e fixtures, and tests to the new output contract format
+
+## [0.16.0] - 2026-02-15
+
+### Added
+
+- **Provider-specific permission profiles (`provider_profiles`)**: Define default permission modes per provider and per-movement overrides in global (`~/.takt/config.yaml`) and project (`.takt/config.yaml`) config — 5-level priority resolution (project override → global override → project default → global default → `required_permission_mode` floor)
+
+### Changed
+
+- **BREAKING: `permission_mode` → `required_permission_mode`**: Renamed movement's `permission_mode` field to `required_permission_mode` — acts as a floor value; the actual permission mode is resolved via `provider_profiles`. Old `permission_mode` is rejected by `z.never()`, no backward compatibility
+- Rewrote builtin `config.yaml` template: reorganized comments, added `provider_profiles` description and examples, added OpenCode-related settings
+
+### Internal
+
+- Added tests for provider profile resolution (global-provider-profiles, project-provider-profiles, permission-profile-resolution, options-builder)
+- Added missing `loadProjectConfig` mock to parallel execution tests
+
+## [0.15.0] - 2026-02-15
+
+### Added
+
+- **Runtime environment presets**: `piece_config.runtime.prepare` and global config `runtime.prepare` allow environment preparation scripts to run automatically before piece execution — builtin presets (`gradle`, `node`) isolate dependency resolution and cache setup to the `.runtime/` directory
+- **Loop monitor judge instruction**: `loop_monitors` judge config now supports `instruction_template` field — externalizes loop judgment instructions as an instruction facet, applied to builtin pieces (expert, expert-cqrs)
+
+### Internal
+
+- Added runtime environment tests (runtime-environment, globalConfig-defaults, models, provider-options-piece-parser)
+- Added provider e2e test (runtime-config-provider)
+
+## [0.14.0] - 2026-02-14
+
+### Added
+
+- **`takt list` instruct mode (#267)**: Added instruct mode for issuing additional instructions to existing branches — refine requirements through a conversation loop before piece execution
+- **`takt list` completed task actions (#271)**: Added diff view and branch operations (merge, delete) for completed tasks
+- **Claude sandbox configuration**: `provider_options.claude.sandbox` supports `excluded_commands` and `allow_unsandboxed_commands`
+- **`provider_options` global/project config**: `provider_options` can now be set in `~/.takt/config.yaml` (global) and `.takt/config.yaml` (project) — acts as lowest-priority fallback for piece-level settings
+
+### Changed
+
+- **Consolidated provider/model resolution into AgentRunner**: Fixed provider resolution to prioritize project config over custom agent config. Added step-level `stepModel`/`stepProvider` overrides
+- **Unified post-execution flow**: Shared `postExecution.ts` for interactive mode and instruct mode (auto-commit, push, PR creation)
+- **Added scope-narrowing prevention to instructions**: plan, ai-review, and supervise instructions now require detecting missed requirements — plan mandates per-requirement "change needed/not needed" judgments with rationale, supervise prohibits blindly trusting plan reports
+
+### Fixed
+
+- Fixed a bug where interactive mode options were displayed during async execution (#266)
+- Fixed OpenCode session ID not being carried over during parallel execution — server singleton prevents race conditions in parallel runs
+- Extended OpenCode SDK server startup timeout from 30 seconds to 60 seconds
+
+### Internal
+
+- Large-scale task management refactor: split `TaskRunner` responsibilities into `TaskLifecycleService`, `TaskDeletionService`, and `TaskQueryService`
+- Split `taskActions.ts` by feature: `taskBranchLifecycleActions.ts`, `taskDiffActions.ts`, `taskInstructionActions.ts`, `taskDeleteActions.ts`
+- Added `postExecution.ts`, `taskResultHandler.ts`, `instructMode.ts`, `taskActionTarget.ts`
+- Consolidated piece selection logic into `pieceSelection/index.ts` (extracted from `selectAndExecute.ts`)
+- Added/expanded tests: instructMode, listNonInteractive-completedActions, listTasksInteractiveStatusActions, option-resolution-order, taskInstructionActions, selectAndExecute-autoPr, etc.
+- Added Claude Code sandbox option (`dangerouslyDisableSandbox`) to E2E tests
+- Added `OPENCODE_CONFIG_CONTENT` to `.gitignore`
+
+## [0.13.0] - 2026-02-13
+
+### Added
+
+- **Team Leader movement**: New movement type where a team leader agent dynamically decomposes a task into sub-tasks (Parts) and executes multiple part agents in parallel — supports `team_leader` config (persona, maxParts, timeoutMs, partPersona, partEdit, partPermissionMode) (#244)
+- **Structured Output**: Introduced JSON Schema-based structured output for agent calls — three schemas for task decomposition, rule evaluation, and status judgment added to `builtins/schemas/`. Supported by both Claude and Codex providers (#257)
+- **`provider_options` piece-level config**: Provider-specific options (`codex.network_access`, `opencode.network_access`) can now be set at piece level (`piece_config.provider_options`) and individual movements — Codex/OpenCode network access enabled in all builtin pieces
+- **`backend` builtin piece**: New backend development piece — parallel specialist review by backend, security, and QA reviewers
+- **`backend-cqrs` builtin piece**: New CQRS+ES backend development piece — parallel specialist review by CQRS+ES, security, and QA reviewers
+- **AbortSignal for part timeouts**: Added timeout control and parent signal propagation via AbortSignal for Team Leader part execution
+- **Agent usecase layer**: `agent-usecases.ts` consolidates agent call usecases (`decomposeTask`, `executeAgent`, `evaluateRules`) and centralizes structured output injection
+
+### Changed
+
+- **BREAKING: Public API cleanup**: Significantly narrowed the public API in `src/index.ts` — internal implementation details (session management, Claude/Codex client internals, utility functions, etc.) are no longer exported, reducing the API surface to a stable minimum (#257)
+- **Revamped Phase 3 judgment logic**: Removed `JudgmentDetector`/`FallbackStrategy` and consolidated into `status-judgment-phase.ts` with structured output-based judgment. Improves stability and maintainability (#257)
+- **Report phase retry improvement**: Report Phase (Phase 2) now automatically retries with a new session when it fails (#245)
+- **Unified Ctrl+C shutdown**: Removed `sigintHandler.ts` and consolidated into `ShutdownManager` — graceful shutdown → timeout → force-kill in three stages, unified across all providers (#237)
+- **Scope-deletion guardrails**: Added rules to coder persona prohibiting deletions and structural changes outside the task instruction scope. Added scope discipline and reference material priority rules to planner persona
+- Added design token and theme scope guidance to frontend knowledge
+- Improved architecture knowledge (both en/ja)
+
+### Fixed
+
+- Fixed checkout failure for existing branches during clone — now passes `--branch` to `git clone --shared` then removes the remote
+- Removed `#` from issue-referenced branch names (`takt/#N/slug` → `takt/N/slug`)
+- Resolved deprecated tool dependency in OpenCode report phase; migrated to permission-based control (#246)
+- Removed unnecessary exports to ensure public API consistency
+
+### Internal
+
+- Added Team Leader tests (engine-team-leader, team-leader-schema-loader, task-decomposer)
+- Added structured output tests (parseStructuredOutput, claude-executor-structured-output, codex-structured-output, provider-structured-output, structured-output E2E)
+- Added unit tests for ShutdownManager
+- Added unit tests for AbortSignal (abort-signal, claude-executor-abort-signal, claude-provider-abort-signal)
+- Added unit tests for Report Phase retry (report-phase-retry)
+- Added unit tests for public API exports (public-api-exports)
+- Added tests for provider_options (provider-options-piece-parser, models, opencode-types)
+- Significantly expanded E2E tests: cycle-detection, model-override, multi-step-sequential, pipeline-local-repo, report-file-output, run-sigint-graceful, session-log, structured-output, task-status-persistence
+- Refactored E2E test helpers (extracted shared setup functions)
+- Removed `judgment/` directory (JudgmentDetector, FallbackStrategy)
+- Added `ruleIndex.ts` utility (1-based → 0-based index conversion)
+
+## [0.12.1] - 2026-02-11
+
+### Fixed
+
+- Fixed silent fallthrough to a new session when the session was not found — now shows an info message when no session is detected
+
+### Internal
+
+- Set OpenCode provider report phase to deny (prevents unnecessary writes in Phase 2)
+- Skip copying `tasks/` directory during project initialization (TASK-FORMAT is no longer needed)
+- Added stream diagnostics utility (`streamDiagnostics.ts`)
+
+## [0.12.0] - 2026-02-11
+
+### Added
+
+- **OpenCode provider**: Native support for OpenCode as a third provider — SDK integration via `@opencode-ai/sdk/v2`, permission mapping (readonly/edit/full → reject/once/always), SSE stream handling, retry mechanism (up to 3 times), and hang detection with 10-minute timeout (#236, #238)
+- **Arpeggio movement**: New movement type for data-driven batch processing — CSV data source with batch splitting, template expansion (`{line:N}`, `{col:N:name}`, `{batch_index}`), concurrent LLM calls (Semaphore-controlled), and concat/custom merge strategies (#200)
+- **`frontend` builtin piece**: Frontend development piece — React/Next.js knowledge injection, coding/testing policy, parallel architecture review
+- **Slack Webhook notifications**: Automatic Slack notification on piece completion — configured via `TAKT_NOTIFY_WEBHOOK` env var, 10-second timeout, non-blocking on failure (#234)
+- **Session selector UI**: On interactive mode startup, select a resumable session from past Claude Code sessions — shows latest 10 sessions with initial input and last response preview (#180)
+- **Provider event logs**: Claude/Codex/OpenCode execution events written to NDJSON files — `.takt/logs/{sessionId}-provider-events.jsonl`, with automatic compression of large text (#236)
+- **Provider/model name display**: Active provider and model name shown in console output at each movement execution
+
+### Changed
+
+- **Revamped `takt add`**: Auto-add to task on issue selection, removed interactive mode, added task stacking confirmation on issue creation (#193, #194)
+- **`max_iteration` → `max_movement` unification**: Unified terminology for iteration limits; added `ostinato` for unlimited execution (#212)
+- **Improved `previous_response` injection**: Implemented length control and always-inject Source Path (#207)
+- **Task management improvements**: Redefined `.takt/tasks/` as storage for long-form task specs; `completeTask()` removes completed records from `tasks.yaml` (#201, #204)
+- **Improved review output**: Updated review output format; moved past reports to history log (#209)
+- **Simplified builtin pieces**: Further streamlined top-level declarations across all builtin pieces
+
+### Fixed
+
+- **Fixed Report Phase blocked behavior**: Report Phase (Phase 2) now retries with a new session when blocked (#163)
+- **Fixed OpenCode hang and termination detection**: Suppressed prompt echo, suppressed question prompts, fixed hang issues, corrected termination detection (#238)
+- **Fixed OpenCode permission and tool wiring**: Corrected permission and tool wiring during edit execution
+- **Worktree task spec copy**: Fixed task spec not being correctly copied during worktree execution
+- Fixed lint errors (merge/resolveTask/confirm)
+
+### Internal
+
+- Comprehensive OpenCode provider tests added (client-cleanup, config, provider, stream-handler, types)
+- Comprehensive Arpeggio tests added (csv, data-source-factory, merge, schema, template, engine-arpeggio)
+- Significantly expanded E2E tests: cli-catalog, cli-clear, cli-config, cli-export-cc, cli-help, cli-prompt, cli-reset-categories, cli-switch, error-handling, piece-error-handling, provider-error, quiet-mode, run-multiple-tasks, task-content-file (#192, #198)
+- Added `providerEventLogger.ts`, `providerModel.ts`, `slackWebhook.ts`, `session-reader.ts`, `sessionSelector.ts`, `provider-resolution.ts`, `run-paths.ts`
+- Added `ArpeggioRunner.ts` (data-driven batch processing engine)
+- AI Judge now routes through provider system (Codex/OpenCode support)
+- Added/expanded tests: report-phase-blocked, phase-runner-report-history, judgment-fallback, pieceExecution-session-loading, globalConfig-defaults, session-reader, sessionSelector, slackWebhook, providerEventLogger, provider-model, interactive, run-paths, engine-test-helpers
+
+## [0.11.1] - 2026-02-10
+
+### Fixed
+
+- Fixed AI Judge to route through provider system — changed `callAiJudge` from a Claude-only implementation to provider-based (`runAgent`), enabling correct AI judgment with the Codex provider
+- Reduced instruction bloat — set `pass_previous_response: false` in implement/fix movements, prioritizing reports in the Report Directory as primary information source (en/ja)
+
+### Internal
+
+- Improved CI workflow to automatically sync npm `next` dist-tag to `latest` on stable releases (with retry)
+
+## [0.11.0] - 2026-02-10
+
+### Added
+
+- **`e2e-test` builtin piece**: E2E test focused piece — E2E analysis → E2E implementation → review → fix flow (for Vitest-based E2E tests)
+- **`error` status**: Separated provider errors from `blocked`, enabling clear distinction of error states. Added retry mechanism to Codex
+- **Centralized task YAML management**: Unified task file management into `tasks.yaml`. Structured task lifecycle management (pending/running/completed/failed) via `TaskRecordSchema`
+- **Task spec documentation**: Documented the structure and purpose of task specs (#174)
+- **Review policy**: Added shared review policy facet (`builtins/{lang}/policies/review.md`)
+- **SIGINT graceful shutdown E2E test**: E2E test to verify Ctrl+C behavior during parallel execution
+
+### Changed
+
+- **Simplified builtin pieces**: Removed top-level `policies`/`personas`/`knowledge`/`instructions`/`report_formats` declarations from all builtin pieces, migrating to implicit name-based resolution. Piece YAML is now simpler
+- **Updated piece category spec**: Improved category configuration and display logic. Enhanced category management in global config (#184)
+- **Improved `takt list` priority and resolution**: Optimized branch resolution performance. Introduced base commit cache (#186, #195, #196)
+- **Improved Ctrl+C signal handling**: Stabilized SIGINT handling during parallel execution
+- **Strengthened loop prevention policy**: Enhanced policy to prevent agent infinite loops
+
+### Fixed
+
+- Fixed original instruction diff processing not working correctly (#181)
+- Fixed task spec goal being inappropriately scope-expanded — goal is now always fixed to implementation and execution
+
+### Internal
+
+- Large-scale task management refactor: removed `parser.ts` and split into `store.ts`/`mapper.ts`/`schema.ts`/`naming.ts`. Split branch resolution into `branchGitResolver.ts`/`branchBaseCandidateResolver.ts`/`branchBaseRefCache.ts`/`branchEntryPointResolver.ts`
+- Significantly expanded and refactored tests: added aggregate-evaluator, blocked-handler, branchGitResolver-performance, branchList-regression, buildListItems-performance, error-utils, escape, facet-resolution, getFilesChanged, global-pieceCategories, instruction-context, instruction-helpers, judgment-strategies, listTasksInteractivePendingLabel, loop-detector, naming, reportDir, resetCategories, rule-evaluator, rule-utils, slug, state-manager, switchPiece, task-schema, text, transitions, watchTasks, etc.
+- Refactored Codex client
+- Improved facet resolution logic in piece parser
+
+## [0.10.0] - 2026-02-09
+
+### Added
+
+- **`structural-reform` builtin piece**: Full project review and structural reform — iterative codebase restructuring with staged file splits, powered by `loop_monitors`
+- **`unit-test` builtin piece**: Unit test focused piece — test analysis → test implementation → review → fix, with `loop_monitors` for cycle control
+- **`test-planner` persona**: Specialized persona for analyzing codebase and planning comprehensive test strategies
+- **Interactive mode variants**: Four selectable modes after piece selection — `assistant` (default: AI-guided requirement refinement), `persona` (conversation with first movement's persona), `quiet` (generate instructions without questions), `passthrough` (user input used as-is)
+- **`persona_providers` config**: Per-persona provider overrides (e.g., `{ coder: 'codex' }`) — route specific personas to different providers without creating hybrid pieces
+- **`task_poll_interval_ms` config**: Configurable polling interval for `takt run` to detect new tasks during execution (default: 500ms, range: 100–5000ms)
+- **`interactive_mode` piece field**: Piece-level default interactive mode override (e.g., set `passthrough` for pieces that don't benefit from AI planning)
+- **Task-level output prefixing**: Colored `[taskName]` prefix on all output lines during parallel `takt run` execution, preventing mid-line interleaving between concurrent tasks
+- **Review policy facet**: Shared review policy (`builtins/{lang}/policies/review.md`) for consistent review criteria across pieces
+
+### Changed
+
+- **BREAKING:** Removed all Hybrid Codex pieces (`*-hybrid-codex`) — replaced by `persona_providers` config which achieves the same result without duplicating piece files
+- Removed `tools/generate-hybrid-codex.mjs` (no longer needed with `persona_providers`)
+- Improved parallel execution output: movement-level prefix now includes task context and iteration info in concurrent runs
+- Codex client now detects stream hangs (10-minute idle timeout) and distinguishes timeout vs external abort in error messages
+- Parallel task execution (`takt run`) now polls for newly added tasks during execution instead of only checking between task completions
+- Parallel task execution no longer enforces per-task time limits (previously had a timeout)
+- Issue references now routed through interactive mode (as initial input) instead of skipping interactive mode entirely
+- Builtin `config.yaml` updated to document all GlobalConfig fields
+- Extracted `conversationLoop.ts` for shared conversation logic across interactive mode variants
+- Line editor improvements: additional key bindings and edge case fixes
+
+### Fixed
+
+- Codex processes hanging indefinitely when stream becomes idle — now aborted after 10 minutes of inactivity, releasing worker pool slots
+
+### Internal
+
+- New test coverage: engine-persona-providers, interactive-mode (532 lines), task-prefix-writer, workerPool expansion, pieceResolver expansion, lineEditor expansion, parallel-logger expansion, globalConfig-defaults expansion, pieceExecution-debug-prompts expansion, it-piece-loader expansion, runAllTasks-concurrency expansion, engine-parallel
+- Extracted `TaskPrefixWriter` for task-level parallel output management
+- Extracted `modeSelection.ts`, `passthroughMode.ts`, `personaMode.ts`, `quietMode.ts` from interactive module
+- `InteractiveMode` type model added (`src/core/models/interactive-mode.ts`)
+- `PieceEngine` validates `taskPrefix`/`taskColorIndex` pair consistency at construction
+- Implementation notes document added (`docs/implements/retry-and-session.ja.md`)
+
+## [0.9.0] - 2026-02-08
+
+### Added
+
+- **`takt catalog` command**: List available facets (personas, policies, knowledge, instructions, output-contracts) across layers (builtin/user/project)
+- **`compound-eye` builtin piece**: Multi-model review — sends the same instruction to Claude and Codex simultaneously, then synthesizes both responses
+- **Parallel task execution**: `takt run` now uses a worker pool for concurrent task execution (controlled by `concurrency` config, default: 1)
+- **Rich line editor in interactive mode**: Shift+Enter for multiline input, cursor movement (arrow keys, Home/End), Option+Arrow word movement, Ctrl+A/E/K/U/W editing, paste bracket mode support
+- **Movement preview in interactive mode**: Injects piece movement structure (persona + instruction) into the AI planner for improved task analysis (`interactive_preview_movements` config, default: 3)
+- **MCP server configuration**: Per-movement MCP (Model Context Protocol) server settings with stdio/SSE/HTTP transport support
+- **Facet-level eject**: `takt eject persona coder` — eject individual facets by type and name for customization
+- **3-layer facet resolution**: Personas, policies, and other facets resolved via project → user → builtin lookup (name-based references supported)
+- **`pr-commenter` persona**: Specialized persona for posting review findings as GitHub PR comments
+- **`notification_sound` config**: Enable/disable notification sounds (default: true)
+- **Prompt log viewer**: `tools/prompt-log-viewer.html` for visualizing prompt-response pairs during debugging
+- Auto-PR base branch now set to the current branch before branch creation
+
+### Changed
+
+- Unified planner and architect-planner: extracted design knowledge into knowledge facets, merged into planner. Removed architect movement from default/coding pieces (plan → implement direct transition)
+- Replaced readline with raw-mode line editor in interactive mode (cursor management, inter-line movement, Kitty keyboard protocol)
+- Unified interactive mode `save_task` with `takt add` worktree setup flow
+- Added `-d` flag to caffeinate to prevent App Nap process freezing during display sleep
+- Issue references now routed through interactive mode (previously executed directly, now used as initial input)
+- SDK update: `@anthropic-ai/claude-agent-sdk` v0.2.34 → v0.2.37
+- Enhanced interactive session scoring prompts with piece structure information
+
+### Internal
+
+- Extracted `resource-resolver.ts` for facet resolution logic (separated from `pieceParser.ts`)
+- Extracted `parallelExecution.ts` (worker pool), `resolveTask.ts` (task resolution), `sigintHandler.ts` (shared SIGINT handler)
+- Unified session key generation via `session-key.ts`
+- New `lineEditor.ts` (raw-mode terminal input, escape sequence parsing, cursor management)
+- Extensive test additions: catalog, facet-resolution, eject-facet, lineEditor, formatMovementPreviews, models, debug, strip-ansi, workerPool, runAllTasks-concurrency, session-key, interactive (major expansion), cli-routing-issue-resolve, parallel-logger, engine-parallel-failure, StreamDisplay, getCurrentBranch, globalConfig-defaults, pieceExecution-debug-prompts, selectAndExecute-autoPr, it-notification-sound, it-piece-loader, permission-mode (expansion)
+
+## [0.8.0] - 2026-02-08
+
+Formal release of 0.8.0-alpha.1 content. No functional changes.
+
+## [0.8.0-alpha.1] - 2026-02-07
+
+### Added
+
+- **Faceted Prompting architecture**: Prompt components are managed as independent files and can be freely combined across pieces
+  - `personas/` — persona prompts defining agent role and expertise
+  - `policies/` — policies defining coding standards, quality criteria, and prohibitions
+  - `knowledge/` — knowledge defining domain knowledge and architecture information
+  - `instructions/` — instructions defining movement-specific procedures
+  - `output-contracts/` — output contracts defining report output formats
+  - Piece YAML section maps (`personas:`, `policies:`, `knowledge:`) associate keys with file paths; movements reference by key
+- **Output Contracts and Quality Gates**: Structured definitions for report output and AI directives for quality criteria
+  - `output_contracts` field defines reports (replaces `report` field)
+  - `quality_gates` field specifies AI directives for movement completion requirements
+- **Knowledge system**: Separates domain knowledge from personas, managed and injected at piece level
+  - `knowledge:` section map in piece YAML defines knowledge files
+  - Movements reference by key via `knowledge:` field
+- **Faceted Prompting documentation**: Design philosophy and practical guide added to `docs/faceted-prompting.md` (en/ja)
+- **Hybrid Codex piece generation tool**: `tools/generate-hybrid-codex.mjs` auto-generates Codex variants from Claude pieces
+- Failed task re-queue: select failed task branches from `takt list` and re-execute (#110)
+- Branch name generation strategy is now configurable (`branch_name_strategy` config)
+- Added auto-PR feature and unified PR creation logic (#98)
+- Piece selection now also applies for issue references (#97)
+- Optional macOS idle sleep prevention during piece execution (#100)
+
+### Changed
+
+- **BREAKING:** Renamed `resources/global/` directory to `builtins/`
+  - `resources/global/{lang}/` → `builtins/{lang}/`
+  - Changed `files` field in package.json from `resources/` to `builtins/`
+- **BREAKING:** Renamed `agent` field to `persona`
+  - Piece YAML: `agent:` → `persona:`, `agent_name:` → `persona_name:`
+  - Internal types: `agentPath` → `personaPath`, `agentDisplayName` → `personaDisplayName`, `agentSessions` → `personaSessions`
+  - Directories: `agents/` → `personas/` (global, project, and builtin)
+- **BREAKING:** Changed `report` field to `output_contracts`
+  - Unified legacy `report: 00-plan.md` / `report: [{Scope: ...}]` / `report: {name, order, format}` formats to `output_contracts: {report: [...]}` format
+- **BREAKING:** Renamed `stances` → `policies`, `report_formats` → `output_contracts`
+- Migrated all builtin pieces to Faceted Prompting architecture (separated domain knowledge from old agent prompts into knowledge facets)
+- SDK updates: `@anthropic-ai/claude-agent-sdk` v0.2.19 → v0.2.34, `@openai/codex-sdk` v0.91.0 → v0.98.0
+- Added `policy`/`knowledge` fields to movements (referenced by section map keys)
+- Added policy-based evaluation to interactive mode scoring
+- Refreshed README: agent → persona, added section map description, clarified control/management classification
+- Refreshed builtin skill (SKILL.md) for Faceted Prompting
+
+### Fixed
+
+- Fixed report directory path resolution bug
+- Fixed PR issue number link not being set correctly
+- Fixed gitignored files being committed in `stageAndCommit` (removed `git add -f .takt/reports/`)
+
+### Internal
+
+- Large-scale builtin resource restructuring: removed old `agents/` directory structure (`default/`, `expert/`, `expert-cqrs/`, `magi/`, `research/`, `templates/`) and migrated to flat `personas/`, `policies/`, `knowledge/`, `instructions/`, `output-contracts/` structure
+- Added Faceted Prompting style guides and templates (`PERSONA_STYLE_GUIDE.md`, `POLICY_STYLE_GUIDE.md`, `INSTRUCTION_STYLE_GUIDE.md`, `OUTPUT_CONTRACT_STYLE_GUIDE.md`, etc. in `builtins/ja/`)
+- Added policy, knowledge, and instruction resolution logic to `pieceParser.ts`
+- Added/expanded tests: knowledge, policy-persona, deploySkill, StreamDisplay, globalConfig-defaults, sleep, task, taskExecution, taskRetryActions, addTask, saveTaskFile, parallel-logger, summarize
+- Added policy and knowledge content injection to `InstructionBuilder`
+- Added `taskRetryActions.ts` (failed task re-queue logic)
+- Added `sleep.ts` utility
+- Removed old prompt files (`interactive-summary.md`, `interactive-system.md`)
+- Removed old agent templates (`templates/coder.md`, `templates/planner.md`, etc.)
+
+## [0.7.1] - 2026-02-06
+
+### Fixed
+
+- Fixed Ctrl+C not working during piece execution: SIGINT handler now calls `interruptAllQueries()` to stop active SDK queries
+- Fixed EPIPE crash after Ctrl+C: dual protection for EPIPE errors when SDK writes to stdin of a stopped child process (`uncaughtException` handler + `Promise.resolve().catch()`)
+- Fixed terminal raw mode leaking when an exception occurs in the select menu's `onKeypress` handler
+
+### Internal
+
+- Added integration tests for SIGINT handler and EPIPE suppression (`it-sigint-interrupt.test.ts`)
+- Added key input safety tests for select menu (`select-rawmode-safety.test.ts`)
+
+## [0.7.0] - 2026-02-06
+
+### Added
+
+- Hybrid Codex pieces: Added Codex variants for all major pieces (default, minimal, expert, expert-cqrs, passthrough, review-fix-minimal, coding)
+  - Hybrid configuration running the coder agent on the Codex provider
+  - en/ja support
+- `passthrough` piece: Minimal piece that passes the task directly to the coder
+- `takt export-cc` command: Deploy builtin pieces and agents as Claude Code Skills
+- Added delete action to `takt list`, separated non-interactive mode
+- AI consultation action: `takt add` / interactive mode can now create GitHub Issues and save task files
+- Cycle detection: Added `CycleDetector` to detect infinite loops between ai_review and ai_fix (#102)
+  - Added arbitration step (`ai_no_fix`) to the default piece for when no fix is needed
+- CI: Added workflow to auto-delete skipped TAKT Action runs weekly
+- Added Hybrid Codex subcategory to piece categories (en/ja)
+
+### Changed
+
+- Simplified category configuration: merged `default-categories.yaml` into `piece-categories.yaml`, changed to auto-copy to user directory
+- Fixed subcategory navigation in piece selection UI (recursive hierarchical display now works correctly)
+- Refreshed Claude Code Skill to Agent Team-based design
+- Unified `console.log` to `info()` (list command)
+
+### Fixed
+
+- Fixed YAML parse error caused by colons in Hybrid Codex piece descriptions
+- Fixed invalid arguments passed to `selectPieceFromCategoryTree` on subcategory selection
+
+### Internal
+
+- Refactored `list` command: separated `listNonInteractive.ts`, `taskDeleteActions.ts`
+- Added `cycle-detector.ts`, integrated cycle detection into `PieceEngine`
+- Refactored piece category loader (`pieceCategories.ts`, `pieceSelection/index.ts`)
+- Added tests: cycle-detector, engine-loop-monitors, piece-selection, listNonInteractive, taskDeleteActions, createIssue, saveTaskFile
+
+## [0.6.0] - 2026-02-05
+
+Formal release of RC1/RC2 content. No functional changes.
+
+## [0.6.0-rc1] - 2026-02-05
+
+### Fixed
+
+- Fixed infinite loop between ai_review and ai_fix: resolved issue where ai_fix judging "no fix needed" caused a return to plan and restarted the full pipeline
+  - Added `ai_no_fix` arbitration step (architecture-reviewer judges the ai_review vs ai_fix conflict)
+  - Changed ai_fix "no fix needed" route from `plan` to `ai_no_fix`
+  - Affected pieces: default, expert, expert-cqrs (en/ja)
+
+### Changed
+
+- Changed default piece parallel reviewer from security-review to qa-review (optimized for TAKT development)
+- Moved qa-reviewer agent from `expert/` to `default/` and rewrote with focus on test coverage
+- Added iteration awareness to ai_review instruction (first iteration: comprehensive review; subsequent: prioritize fix verification)
+
+### Internal
+
+- Restricted auto-tag workflow to merges from release/ branches only, unified publish job (resolves chained trigger failure due to GITHUB_TOKEN limitations)
+- Removed postversion hook (conflicts with release branch flow)
+- Updated tests: adapted to security-reviewer → qa-reviewer change
+
+## [0.6.0-rc] - 2026-02-05
+
+### Added
+
+- **`coding` builtin piece**: Lightweight development piece — design → implement → parallel review → fix (fast feedback loop without plan/supervise steps)
+- **`conductor` agent**: Dedicated agent for Phase 3 judgment. Reads reports and responses to output judgment tags
+- **Phase 3 judgment fallback strategy**: 4-stage fallback (AutoSelect → ReportBased → ResponseBased → AgentConsult) to improve judgment accuracy (`src/core/piece/judgment/`)
+- **Session state management**: Saves task execution results (success/error/interrupted) and displays previous result on next interactive mode startup (#89)
+- TAKT meta information (piece structure, progress) injection mechanism for agents
+- **`/play` command**: Immediately executes task in interactive mode
+- E2E test infrastructure: mock/provider-compatible test infrastructure, 10 E2E test specs, test helpers (isolated-env, takt-runner, test-repo)
+- Added detection rule for "logically unreachable defensive code" to review agents
+
+### Changed
+
+- Changed Phase 3 judgment logic from session-resume approach to conductor agent + fallback strategy (improved judgment stability)
+- Refactored CLI routing as `executeDefaultAction()` function, reusable as fallback from slash commands (#32)
+- Input starting with `/` or `#` is now accepted as task instruction when no command/issue is found (#32)
+- Simplified `isDirectTask()`: only issue references execute directly, all others go to interactive mode
+- Removed `pass_previous_response: true` from all builtin pieces (redundant as it is the default behavior)
+
+### Internal
+
+- Added E2E test config files (vitest.config.e2e.ts, vitest.config.e2e.mock.ts, vitest.config.e2e.provider.ts)
+- Added `getReportFiles()`, `hasOnlyOneBranch()`, `getAutoSelectedTag()` to `rule-utils.ts`
+- Added report content and response-based judgment instruction generation to `StatusJudgmentBuilder`
+- Added piece meta information (structure, iteration counts) injection to `InstructionBuilder`
+- Added tests: judgment-detector, judgment-fallback, sessionState, pieceResolver, cli-slash-hash, e2e-helpers
+
+## [0.5.1] - 2026-02-04
+
+### Fixed
+
+- Windows environment file path handling and encoding issues (#90, #91)
+  - Improved .git detection for Windows
+  - Added mandatory .git check for Codex (error if not found)
+  - Fixed character encoding issues
+- Codex branch name summary processing bug
+
+### Internal
+
+- Test memory leak and hanging issues resolved
+  - Added cleanup handlers for PieceEngine and TaskWatcher
+  - Changed vitest to single-threaded execution for improved test stability
+
+## [0.5.0] - 2026-02-04
+
+### Changed
+
+- **BREAKING:** Complete terminology migration from "workflow" to "piece" across entire codebase
+  - All CLI commands, configuration files, and documentation now use "piece" terminology
+  - `WorkflowEngine` → `PieceEngine`
+  - `workflow_categories` → `piece_categories` in config files
+  - `builtin_workflows_enabled` → `builtin_pieces_enabled`
+  - `~/.takt/workflows/` → `~/.takt/pieces/` (user piece directory)
+  - `.takt/workflows/` → `.takt/pieces/` (project piece directory)
+  - All workflow-related file names and types renamed to piece-equivalents
+  - Updated all documentation (README.md, CLAUDE.md, docs/*)
+
+### Internal
+
+- Complete directory structure refactoring:
+  - `src/core/workflow/` → `src/core/piece/`
+  - `src/features/workflowSelection/` → `src/features/pieceSelection/`
+- File renames:
+  - `workflow-types.ts` → `piece-types.ts`
+  - `workflowExecution.ts` → `pieceExecution.ts`
+  - `workflowLoader.ts` → `pieceLoader.ts`
+  - `workflowParser.ts` → `pieceParser.ts`
+  - `workflowResolver.ts` → `pieceResolver.ts`
+  - `workflowCategories.ts` → `pieceCategories.ts`
+  - `switchWorkflow.ts` → `switchPiece.ts`
+- All test files updated to reflect new terminology (194 files changed, ~3,400 insertions, ~3,400 deletions)
+- Resources directory updated:
+  - `resources/global/*/pieces/*.yaml` updated with new terminology
+  - All prompt files (`*.md`) updated
+  - Configuration files (`config.yaml`, `default-categories.yaml`) updated
+
+## [0.4.1] - 2026-02-04
+
+### Fixed
+
+- Workflow execution bug where previous step's response was incorrectly bound to subsequent steps
+  - Fixed `MovementExecutor`, `ParallelRunner`, and `state-manager` to properly isolate step responses
+  - Updated interactive summary prompts to prevent response leakage
+
+## [0.4.0] - 2026-02-04
+
+### Added
+
+- Externalized prompt system: all internal prompts moved to versioned, translatable files (`src/shared/prompts/en/`, `src/shared/prompts/ja/`)
+- i18n label system: UI labels extracted to separate YAML files (`labels_en.yaml`, `labels_ja.yaml`) with `src/shared/i18n/` module
+- Prompt preview functionality (`src/features/prompt/preview.ts`)
+- Phase system injection into agents for improved workflow phase awareness
+- Enhanced debug capabilities with new debug log viewer (`tools/debug-log-viewer.html`)
+- Comprehensive test coverage:
+  - i18n system tests (`i18n.test.ts`)
+  - Prompt system tests (`prompts.test.ts`)
+  - Session management tests (`session.test.ts`)
+  - Worktree integration tests (`it-worktree-delete.test.ts`, `it-worktree-sessions.test.ts`)
+
+### Changed
+
+- **BREAKING:** Internal terminology renamed: `WorkflowStep` → `WorkflowMovement`, `StepExecutor` → `MovementExecutor`, `ParallelSubStepRawSchema` → `ParallelSubMovementRawSchema`, `WorkflowStepRawSchema` → `WorkflowMovementRawSchema`
+- **BREAKING:** Removed unnecessary backward compatibility code
+- **BREAKING:** Disabled interactive prompt override feature
+- Workflow resource directory renamed: `resources/global/*/workflows/` → `resources/global/*/pieces/`
+- Prompts restructured for better readability and maintainability
+- Removed unnecessary task requirement summarization from conversation flow
+- Suppressed unnecessary report output during workflow execution
+
+### Fixed
+
+- `takt worktree` bug fix for worktree operations
+
+### Internal
+
+- Extracted prompt management into `src/shared/prompts/index.ts` with language-aware file loading
+- Created `src/shared/i18n/index.ts` for centralized label management
+- Enhanced `tools/jsonl-viewer.html` with additional features
+- Major refactoring across 162 files (~5,800 insertions, ~2,900 deletions)
+
+## [0.3.9] - 2026-02-03
+
+### Added
+
+- Workflow categorization support (#85)
+  - Default category configuration in `resources/global/{lang}/default-categories.yaml`
+  - User-defined categories via `workflow_categories` in `~/.takt/config.yaml`
+  - Nested category support with unlimited depth
+  - Category-based workflow filtering in workflow selection UI
+  - `show_others_category` and `others_category_name` configuration options
+  - Builtin workflow filtering via `builtin_workflows_enabled` and `disabled_builtins`
+- Agent-less step execution: `agent` field is now optional (#71)
+  - Steps can execute with `instruction_template` only (no system prompt)
+  - Inline system prompts supported (agent string used as prompt if file doesn't exist)
+- `takt add #N` automatically reflects issue number in branch name (#78)
+  - Issue number embedded in branch name (e.g., `takt/issue-28-...`)
+
+### Changed
+
+- **BREAKING:** Permission mode values unified to provider-independent format (#87)
+  - New values: `readonly`, `edit`, `full` (replaces `default`, `acceptEdits`, `bypassPermissions`)
+  - TAKT translates to provider-specific flags (Claude: default/acceptEdits/bypassPermissions, Codex: read-only/workspace-write/danger-full-access)
+  - All builtin workflows updated to use new values
+- Workflow naming changes:
+  - `simple` workflow replaced with `minimal` and `review-fix-minimal`
+  - Added `review-only` workflow for read-only code review
+- Agent prompts updated with legacy対応禁止ルール (no backward compatibility hacks)
+- Documentation updates:
+  - README.md and docs/README.ja.md updated with v0.3.8+ features
+  - CLAUDE.md significantly expanded with architectural details and implementation notes
+
+### Internal
+
+- Created `src/infra/config/loaders/workflowCategories.ts` for category management
+- Created `src/features/workflowSelection/index.ts` for workflow selection UI
+- Enhanced `src/shared/prompt/select.ts` with category display support
+- Added comprehensive tests for workflow categories (`workflow-categories.test.ts`, `workflow-category-config.test.ts`)
+
+## [0.3.8] - 2026-02-02
+
+### Added
+
+- CLI option to specify workflow/config file paths: `--workflow <path>` and `--config <path>` (#81)
+- CI-friendly quiet mode for minimal log output (#70)
+- Mock scenario support for testing workflow execution
+- Comprehensive integration tests (7 test files, ~3000 lines of test coverage)
+
+### Changed
+
+- Rule evaluation improved: `detectRuleIndex` now uses last match instead of first match (#25)
+- `ai_fix` step significantly improved:
+  - Added `{step_iteration}` counter to show retry attempt number
+  - Explicit fix procedure defined (Read → Grep → Edit → Test → Report)
+  - Coder agent now prioritizes reviewer feedback over assumptions
+- README and docs updated with clearer CLI usage and CI/CD examples
+
+### Fixed
+
+- Workflow loading priority corrected (user workflows now take precedence over builtins)
+- Test stability improvements (flaky tests skipped, ai_fix test updated)
+- Slack notification configuration fixed
+
+### Internal
+
+- Refactored instruction builder: extracted context assembly and status rules logic (#44)
+- Introduced `src/infra/task/git.ts` for DRY git commit operations
+- Unified error handling with `getErrorMessage()`
+- Made `projectCwd` required throughout codebase
+- Removed deprecated `sacrificeMode`
+- 35 files updated for consistency (`console.log` → `blankLine()`, etc.)
+
+## [0.3.7] - 2026-02-01
+
+### Added
+
+- `--pipeline` flag for explicit pipeline/non-interactive mode execution (#28)
+- Pipeline mode can be used with both `--task` and `--issue` options
+
+### Changed
+
+- Log file naming changed from base36 to human-readable `YYYYMMDD-HHmmss-random` format (#28)
+- `--task` option description updated to clarify it's an alternative to GitHub issue
+
+## [0.3.6] - 2026-01-31
+
+### Fixed
+
+- `ai_review` workflow step now correctly includes `pass_previous_request` setting
+
+## [0.3.5] - 2026-01-31
+
+### Added
+
+- `--create-worktree <yes|no>` option to skip worktree confirmation prompt
+
+### Fixed
+
+- Various CI/CD improvements and fixes (#66, #67, #68, #69)
+
+## [0.3.4] - 2026-01-31
+
+### Added
+
+- Review-only workflow for code review without modifications (#60)
+- Various bug fixes and improvements (#14, #23, #35, #38, #45, #50, #51, #52, #59)
+
+## [0.3.3] - 2026-01-31
+
+### Fixed
+
+- Fixed `takt add #N` passing issue content through AI summarization and corrupting task content (#46)
+  - Changed to use `resolveIssueTask` result directly as the task when referencing issues
+
+## [0.3.1] - 2026-01-31
+
+### Added
+
+- Interactive task planning mode: `takt` (no args) starts AI conversation to refine task requirements before execution (#47, #5)
+  - Session persistence across takt restarts
+  - Read-only tools (Read, Glob, Grep, Bash, WebSearch, WebFetch) for codebase investigation
+  - Planning-only system prompt prevents code changes during conversation
+  - `/go` to confirm and execute, `/cancel` to exit
+- Boy Scout Rule enforcement in reviewer/supervisor agent templates
+
+### Changed
+
+- CLI migrated from slash commands (`takt /run-tasks`) to subcommands (`takt run`) (#47)
+- `/help` and `/refresh-builtin` commands removed; `eject` simplified
+- SDK options builder only includes defined values to prevent hangs
+
+### Fixed
+
+- Claude Agent SDK hanging when `model: undefined` or other undefined options were passed as keys
+
+## [0.3.0] - 2026-01-30
+
+### Added
+
+- Rule-based workflow transitions with 5-stage fallback evaluation (#30)
+  - Tag-based conditions: agent outputs `[STEP:N]` tags matched by index
+  - `ai()` conditions: AI evaluates free-text conditions against agent output (#9)
+  - `all()`/`any()` aggregate conditions for parallel step results (#20)
+  - 5-stage evaluation order: aggregate → Phase 3 tag → Phase 1 tag → AI judge → AI fallback
+- 3-phase step execution model (#33)
+  - Phase 1: Main work (coding, review, etc.)
+  - Phase 2: Report output (when `step.report` defined)
+  - Phase 3: Status judgment (when tag-based rules exist)
+  - Session resumed across phases for context continuity
+- Parallel step execution with concurrent sub-steps via `Promise.all()` (#20)
+- GitHub Issue integration: execute/add tasks by issue number, e.g. `takt #6` (#10, #34)
+- NDJSON session logging with real-time streaming writes (#27, #36)
+- Builtin resources embedded in npm package with `/eject` command for customization (#4, #40)
+- `edit` property for per-step file edit control
+- Rule match method visualization and logging
+- Report output auto-generation from YAML `report.format`
+- Parallel review support in builtin workflows with spec compliance checking (#31)
+- WorkflowEngine mock integration tests (#17, #41)
+
+### Changed
+
+- Report format unified to auto-generation; manual `order`/`instruction_template` for reports removed
+- `gitdiff` report type removed in favor of format-based reports
+
+### Fixed
+
+- Report directory correctly includes `.takt/reports/` prefix (#37, #42)
+- Unused import in eject.ts (#43)
+
+## [0.2.3] - 2026-01-29
+
+### Added
+
+- `/list-tasks` command for branch management (try merge, merge & cleanup, delete)
+
+### Changed
+
+- Isolated execution migrated from `git worktree` to `git clone --shared` to prevent Claude Code SDK from traversing back to main repository
+- Clone lifecycle: auto-deletion after task completion removed; use `/list-tasks` for cleanup
+- `worktree.ts` split into `clone.ts` + `branchReview.ts`
+- Origin remote removed from clones to block SDK traversal
+- All workflow report steps granted Write permission
+- `git clone --shared` changed to `--reference --dissociate`
+
+### Fixed
+
+- Version read from `package.json` instead of hardcoded `0.1.0` (#3)
+
+## [0.2.2] - 2026-01-29
+
+### Added
+
+- `/review` instruct action for executing instructions on task branches
+- AI-powered task name summarization to English slugs for branch names
+- Worktree session inheritance
+- Execution Rules metadata (git commit prohibition, cd prohibition)
+
+### Changed
+
+- Status output rule headers auto-generated
+- Instructions auto-include worktree change context
+- Try Merge changed to squash merge
+- `expert-review` renamed to `expert-cqrs`; common reviewers consolidated under `expert/`
+
+### Fixed
+
+- Tasks incorrectly progressing to `completed` on abnormal termination
+
+## [0.2.1] - 2026-01-28
+
+### Added
+
+- Language setting (`ja`/`en`)
+- Multiline input support for `/add-task`
+- `/review-tasks` command
+- Cursor-based (arrow key) menu selection replacing numeric input
+- `answer` status, `autoCommit`, `permission_mode`, verbose logging options
+
+### Fixed
+
+- Multiple worktree-related bugs (directory resolution, session handling, creation flow)
+- ESC key cancels workflow/task selection
+
+## [0.2.0] - 2026-01-27
+
+### Added
+
+- `/watch` command for file system polling and auto-executing tasks from `.takt/tasks/`
+- `/refresh-builtin` command for updating builtin resources
+- `/add-task` command for interactive task creation
+- Enhanced default workflows
+
+## [0.1.7] - 2026-01-27
+
+### Added
+
+- Schema permission support for workflow validation
+
+## [0.1.6] - 2026-01-27
+
+### Added
+
+- Mock execution mode for testing
+
+### Changed
+
+- `-r` option omitted; default changed to conversation continuation mode
+
+## [0.1.5] - 2026-01-27
+
+### Added
+
+- Total execution time output
+
+### Fixed
+
+- Workflow unintentionally stopping during execution
+
+## [0.1.4] - 2026-01-27
+
+### Changed
+
+- Workflow prompts strengthened
+- Transition prompts consolidated into workflow definitions
+
+## [0.1.3] - 2026-01-26
+
+### Fixed
+
+- Iteration stalling issue
+
+## [0.1.2] - 2026-01-26
+
+### Added
+
+- Codex provider support
+- Model selection per step/agent
+- Permission mode configuration
+- Worktree support for isolated task execution
+- Project `.gitignore` initialization
+
+### Changed
+
+- Agent prompts refined
+
+## [0.1.1] - 2026-01-25
+
+### Added
+
+- GitHub Actions workflow for npm publish
+
+### Changed
+
+- Interactive mode removed; CLI simplified

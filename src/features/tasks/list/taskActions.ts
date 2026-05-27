@@ -1,0 +1,24 @@
+/**
+ * Individual actions for task-centric list items.
+ */
+
+export type { ListAction } from './taskActionTarget.js';
+
+export {
+  showFullDiff,
+  showDiffStatForTask,
+  showDiffAndPromptActionForTask,
+} from './taskDiffActions.js';
+
+export {
+  isBranchMerged,
+  tryMergeBranch,
+  mergeBranch,
+  deleteBranch,
+} from './taskBranchLifecycleActions.js';
+
+export { instructBranch } from './taskInstructionActions.js';
+
+export { syncBranchWithRoot } from './taskSyncAction.js';
+
+export { pullFromRemote } from './taskPullAction.js';

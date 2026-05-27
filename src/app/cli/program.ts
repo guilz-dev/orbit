@@ -1,0 +1,94 @@
+/**
+ * Commander program setup
+ *
+ * Creates the Command instance, registers global options,
+ * and sets up the preAction hook for initialization.
+ */
+
+import { createRequire } from 'node:module';
+import { Command } from 'commander';
+import { resolve } from 'node:path';
+import {
+  initGlobalDirs,
+  initProjectDirs,
+  resolveConfigValues,
+  isVerboseMode,
+} from '../../infra/config/index.js';
+import { initGitProvider } from '../../infra/git/index.js';
+import { setQuietMode } from '../../shared/context.js';
+import { setLogLevel } from '../../shared/ui/index.js';
+import { initDebugLogger, createLogger, setVerboseConsole } from '../../shared/utils/index.js';
+
+const require = createRequire(import.meta.url);
+const { version: cliVersion } = require('../../../package.json') as { version: string };
+
+const log = createLogger('cli');
+
+/** Resolved cwd shared across commands via preAction hook */
+export let resolvedCwd = '';
+
+/** Whether pipeline mode is active (--task specified, set in preAction) */
+export let pipelineMode = false;
+
+export { cliVersion };
+
+export const program = new Command();
+
+program
+  .name('takt')
+  .description('TAKT: TAKT Agent Koordination Topology')
+  .version(cliVersion);
+
+// --- Global options ---
+program
+  .option('-i, --issue <number>', 'Issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
+  .option('--pr <number>', 'PR number to fetch review comments and fix', (val: string) => parseInt(val, 10))
+  .option('-w, --workflow <name>', 'Workflow name or path to workflow file')
+  .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
+  .option('--auto-pr', 'Create PR after successful execution')
+  .option('--draft', 'Create PR as draft (requires --auto-pr or auto_pr config)')
+  .option('--repo <owner/repo>', 'Repository (defaults to current)')
+  .option(
+    '--provider <name>',
+    'Override agent provider (claude-sdk|claude|claude-terminal|codex|opencode|cursor|copilot|mock)',
+  )
+  .option('--model <name>', 'Override agent model')
+  .option('-t, --task <string>', 'Task content (as alternative to issue reference)')
+  .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
+  .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
+  .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
+  .option('-c, --continue', 'Continue from the last assistant session');
+
+/**
+ * Run pre-action hook: common initialization for all commands.
+ * Exported for use in slash-command fallback logic.
+ */
+export async function runPreActionHook(): Promise<void> {
+  resolvedCwd = resolve(process.cwd());
+
+  const rootOpts = program.opts();
+  pipelineMode = rootOpts.pipeline === true;
+
+  await initGlobalDirs({ nonInteractive: pipelineMode });
+  initProjectDirs(resolvedCwd);
+  initGitProvider(resolvedCwd);
+
+  const verbose = isVerboseMode(resolvedCwd);
+  const config = resolveConfigValues(resolvedCwd, ['logging', 'minimalOutput']);
+  initDebugLogger(verbose ? { enabled: true, trace: config.logging?.trace } : undefined, resolvedCwd);
+
+  if (verbose) {
+    setVerboseConsole(true);
+    setLogLevel('debug');
+  } else {
+    setLogLevel(config.logging?.level ?? 'info');
+  }
+
+  const quietMode = rootOpts.quiet === true || config.minimalOutput === true;
+  setQuietMode(quietMode);
+
+  log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode, quietMode });
+}
+
+// Common initialization for all commands
+program.hook('preAction', runPreActionHook);

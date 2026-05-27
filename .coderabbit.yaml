@@ -1,0 +1,67 @@
+language: ja-JP
+
+reviews:
+  profile: assertive
+  poem: false
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        レビュー時は以下の手順で進めること。
+
+        Step 1: knowledge_base に登録された TAKT のコーディングガイドライン
+                （policies/ および knowledge/ 配下のファイル群）を網羅的に参照する。
+        Step 2: 各ガイドラインに含まれるルール・REJECT 例・判定基準を、
+                今回の差分に対して 1 つずつ照合する。
+        Step 3: 該当する違反が見つかった場合、どのガイドラインのどのルールに
+                基づく指摘かを明示して指摘を作成する。
+        Step 4: 一般的なベストプラクティスより、TAKT のガイドラインに
+                書かれた基準を優先せよ。広く使われているパターンであっても、
+                ガイドライン上 REJECT であれば指摘する。
+
+  auto_review:
+    ignore_title_keywords:
+      - "Release v"
+      - "release/v"
+      - "WIP"
+      - "DO NOT MERGE"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+      - "renovate[bot]"
+
+  path_filters:
+    - "!dist/**"
+    - "!node_modules/**"
+    - "!package-lock.json"
+    - "!.takt/**"
+    - "!coverage/**"
+
+  tools:
+    ruff:
+      enabled: false
+    rubocop:
+      enabled: false
+    phpstan:
+      enabled: false
+    phpmd:
+      enabled: false
+    phpcs:
+      enabled: false
+
+chat:
+  art: false
+
+knowledge_base:
+  code_guidelines:
+    filePatterns:
+      - "builtins/ja/facets/policies/ai-antipattern.md"
+      - "builtins/ja/facets/policies/coding.md"
+      - "builtins/ja/facets/policies/review.md"
+      - "builtins/ja/facets/policies/task-decomposition.md"
+      - "builtins/ja/facets/policies/testing.md"
+      - "builtins/ja/facets/knowledge/architecture.md"
+      - "builtins/ja/facets/knowledge/e2e-testing.md"
+      - "builtins/ja/facets/knowledge/security.md"
+      - "builtins/ja/facets/knowledge/takt.md"
+      - "builtins/ja/facets/knowledge/unit-testing.md"

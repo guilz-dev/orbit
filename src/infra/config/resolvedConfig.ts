@@ -1,0 +1,16 @@
+import type { GlobalConfig, ResolvedObservabilityConfig } from '../../core/models/config-types.js';
+import type { ProjectConfig } from './types.js';
+
+export interface LoadedConfig
+  extends Omit<GlobalConfig, 'language'>,
+    ProjectConfig {
+  language: GlobalConfig['language'];
+  observability: ResolvedObservabilityConfig;
+  minimalOutput: NonNullable<ProjectConfig['minimalOutput']>;
+  concurrency: NonNullable<ProjectConfig['concurrency']>;
+  taskPollIntervalMs: NonNullable<ProjectConfig['taskPollIntervalMs']>;
+  interactivePreviewSteps: NonNullable<ProjectConfig['interactivePreviewSteps']>;
+  syncProjectLocalTaktOnRetry: NonNullable<ProjectConfig['syncProjectLocalTaktOnRetry']>;
+}
+
+export type ConfigParameterKey = keyof LoadedConfig;

@@ -1,0 +1,295 @@
+import {
+  TaskRunner,
+} from '../../../infra/task/index.js';
+import type { TaskListItem } from '../../../infra/task/index.js';
+import { selectOption } from '../../../shared/prompt/index.js';
+import { info, header, blankLine } from '../../../shared/ui/index.js';
+import type { TaskExecutionOptions } from '../execute/types.js';
+import {
+  type ListAction,
+  showFullDiff,
+  showDiffAndPromptActionForTask,
+  tryMergeBranch,
+  mergeBranch,
+  instructBranch,
+  syncBranchWithRoot,
+  pullFromRemote,
+} from './taskActions.js';
+import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
+import { forceFailRunningTask } from './taskForceFailActions.js';
+import * as taskRetryActions from './taskRetryActions.js';
+import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
+import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
+
+export type { ListNonInteractiveOptions } from './listNonInteractive.js';
+
+export {
+  type ListAction,
+  isBranchMerged,
+  showFullDiff,
+  tryMergeBranch,
+  mergeBranch,
+  deleteBranch,
+  instructBranch,
+} from './taskActions.js';
+
+export {
+  type InstructModeAction,
+  type InstructModeResult,
+  runInstructMode,
+} from './instructMode.js';
+
+type PendingTaskAction = 'delete';
+type ExceededTaskAction = 'requeue' | 'delete';
+type RunningTaskAction = 'force_fail';
+type FailedTaskAction = 'requeue' | 'retry' | 'delete';
+type PrFailedTaskAction = ListAction;
+type CompletedTaskAction = ListAction;
+
+async function showExceededTaskAndPromptAction(task: TaskListItem): Promise<ExceededTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  if (task.exceededCurrentIteration !== undefined && task.exceededMaxSteps !== undefined) {
+    info(`  Iteration: ${task.exceededCurrentIteration}/${task.exceededMaxSteps}`);
+  }
+  blankLine();
+
+  return await selectOption<ExceededTaskAction>(
+    `Action for ${task.name}:`,
+    [
+      { label: 'Requeue', value: 'requeue', description: 'Resume execution from where it stopped' },
+      { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
+    ],
+  );
+}
+
+async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<PendingTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await selectOption<PendingTaskAction>(
+    `Action for ${task.name}:`,
+    [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
+  );
+}
+
+async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<RunningTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await selectOption<RunningTaskAction>(
+    `Action for ${task.name}:`,
+    [{ label: 'Mark as failed', value: 'force_fail', description: 'Mark stuck running task as failed' }],
+  );
+}
+
+async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await selectOption<FailedTaskAction>(
+    `Action for ${task.name}:`,
+    [
+      { label: 'Requeue', value: 'requeue', description: 'Requeue without conversation' },
+      { label: 'Retry', value: 'retry', description: 'Analyze failure in conversation, then re-run' },
+      { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
+    ],
+  );
+}
+
+async function showPrFailedTaskAndPromptAction(cwd: string, task: TaskListItem): Promise<PrFailedTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  if (task.failure) {
+    info(`  PR Error: ${task.failure.error}`);
+  }
+  blankLine();
+
+  return await showDiffAndPromptActionForTask(cwd, task);
+}
+
+async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem): Promise<CompletedTaskAction | null> {
+  header(formatTaskStatusLabel(task));
+  info(`  Created: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await showDiffAndPromptActionForTask(cwd, task);
+}
+
+export async function listTasks(
+  cwd: string,
+  options?: TaskExecutionOptions,
+  nonInteractive?: ListNonInteractiveOptions,
+): Promise<void> {
+  if (nonInteractive?.enabled) {
+    await listTasksNonInteractive(cwd, nonInteractive);
+    return;
+  }
+
+  const runner = new TaskRunner(cwd);
+
+  while (true) {
+    const tasks = runner.listAllTaskItems();
+
+    if (tasks.length === 0) {
+      info('No tasks to list.');
+      return;
+    }
+
+    const menuOptions = [
+      ...tasks.map((task, idx) => ({
+        label: formatTaskStatusLabel(task),
+        value: `${task.kind}:${idx}`,
+        description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
+      })),
+      { label: 'All Delete', value: '__all-delete__', description: 'Delete all tasks at once' },
+    ];
+
+    const selected = await selectOption<string>(
+      'List Tasks',
+      menuOptions,
+    );
+
+    if (selected === null) {
+      return;
+    }
+
+    if (selected === '__all-delete__') {
+      await deleteAllTasks(tasks);
+      continue;
+    }
+
+    const colonIdx = selected.indexOf(':');
+    if (colonIdx === -1) continue;
+    const type = selected.slice(0, colonIdx);
+    const idx = parseInt(selected.slice(colonIdx + 1), 10);
+    if (Number.isNaN(idx)) continue;
+
+    if (type === 'pending') {
+      const task = tasks[idx];
+      if (!task) continue;
+      const taskAction = await showPendingTaskAndPromptAction(task);
+      if (taskAction === 'delete') {
+        await deleteTaskByKind(task);
+      }
+    } else if (type === 'running') {
+      const task = tasks[idx];
+      if (!task) continue;
+      const taskAction = await showRunningTaskAndPromptAction(task);
+      if (taskAction === 'force_fail') {
+        await forceFailRunningTask(task, cwd);
+      }
+    } else if (type === 'completed') {
+      const task = tasks[idx];
+      if (!task) continue;
+      if (!task.branch) {
+        info(`Branch is missing for completed task: ${task.name}`);
+        continue;
+      }
+      const taskAction = await showCompletedTaskAndPromptAction(cwd, task);
+      if (taskAction === null) continue;
+
+      switch (taskAction) {
+        case 'diff':
+          showFullDiff(cwd, task);
+          break;
+        case 'instruct':
+          await instructBranch(cwd, task);
+          break;
+        case 'sync':
+          await syncBranchWithRoot(cwd, task);
+          break;
+        case 'pull':
+          pullFromRemote(cwd, task);
+          break;
+        case 'try':
+          tryMergeBranch(cwd, task);
+          break;
+        case 'merge':
+          if (mergeBranch(cwd, task)) {
+            runner.deleteTask(task.name, 'completed');
+          }
+          break;
+        case 'delete':
+          await deleteTaskByKind(task);
+          break;
+      }
+    } else if (type === 'failed') {
+      const task = tasks[idx];
+      if (!task) continue;
+      const taskAction = await showFailedTaskAndPromptAction(task);
+      if (taskAction === 'requeue') {
+        await taskRetryActions.requeueFailedTask(task, cwd);
+      } else if (taskAction === 'retry') {
+        await taskRetryActions.retryFailedTask(task, cwd);
+      } else if (taskAction === 'delete') {
+        await deleteTaskByKind(task);
+      }
+    } else if (type === 'exceeded') {
+      const task = tasks[idx];
+      if (!task) continue;
+      const taskAction = await showExceededTaskAndPromptAction(task);
+      if (taskAction === 'requeue') {
+        runner.requeueExceededTask(task.name);
+      } else if (taskAction === 'delete') {
+        await deleteTaskByKind(task);
+      }
+    } else if (type === 'pr_failed') {
+      const task = tasks[idx];
+      if (!task) continue;
+      if (!task.branch) {
+        info(`Branch is missing for pr-failed task: ${task.name}`);
+        continue;
+      }
+      const taskAction = await showPrFailedTaskAndPromptAction(cwd, task);
+      if (taskAction === null) continue;
+
+      switch (taskAction) {
+        case 'diff':
+          showFullDiff(cwd, task);
+          break;
+        case 'instruct':
+          await instructBranch(cwd, task);
+          break;
+        case 'sync':
+          await syncBranchWithRoot(cwd, task);
+          break;
+        case 'pull':
+          pullFromRemote(cwd, task);
+          break;
+        case 'try':
+          tryMergeBranch(cwd, task);
+          break;
+        case 'merge':
+          if (mergeBranch(cwd, task)) {
+            runner.deleteTask(task.name, 'pr_failed');
+          }
+          break;
+        case 'delete':
+          await deleteTaskByKind(task);
+          break;
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+/**
+ * Task feature exports
+ */
+
+export { executeWorkflow, type WorkflowExecutionResult } from './execute/workflowExecution.js';
+export { executeTask, type TaskExecutionOptions } from './execute/taskExecution.js';
+export { runAllTasks } from './execute/runAllTasks.js';
+export { resolveTaskExecution } from './execute/resolveTask.js';
+export { withPersonaSession } from './execute/session.js';
+export type { PipelineExecutionOptions } from './execute/types.js';
+export {
+  selectAndExecuteTask,
+  confirmAndCreateWorktree,
+  determineWorkflow,
+  type SelectAndExecuteOptions,
+  type WorktreeConfirmationResult,
+} from './execute/selectAndExecute.js';
+export { postExecutionFlow, type PostExecutionOptions } from './execute/postExecution.js';
+export { addTask, saveTaskFile, saveTaskFromInteractive, createIssueFromTask, createIssueAndSaveTask, promptLabelSelection } from './add/index.js';
+export { watchTasks } from './watch/index.js';
+export {
+  listTasks,
+  type ListAction,
+  isBranchMerged,
+  showFullDiff,
+  tryMergeBranch,
+  mergeBranch,
+  deleteBranch,
+  instructBranch,
+} from './list/index.js';

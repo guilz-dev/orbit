@@ -1,0 +1,237 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  createProviderEventLogger,
+  isProviderEventsEnabled,
+} from '../shared/utils/providerEventLogger.js';
+import type { ProviderType } from '../core/workflow/index.js';
+
+describe('providerEventLogger', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `takt-provider-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    mkdirSync(tempDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('should disable provider events by default', () => {
+    expect(isProviderEventsEnabled()).toBe(false);
+    expect(isProviderEventsEnabled({})).toBe(false);
+    expect(isProviderEventsEnabled({ logging: {} })).toBe(false);
+  });
+
+  it('should enable provider events only when explicitly true', () => {
+    expect(isProviderEventsEnabled({ logging: { providerEvents: true } })).toBe(true);
+  });
+
+  it('should disable provider events only when explicitly false', () => {
+    expect(isProviderEventsEnabled({ logging: { providerEvents: false } })).toBe(false);
+  });
+
+  it('should not enable provider events from legacy observability key', () => {
+    const legacyOnlyConfig = {
+      observability: { providerEvents: true },
+    } as unknown as Parameters<typeof isProviderEventsEnabled>[0];
+    expect(isProviderEventsEnabled(legacyOnlyConfig)).toBe(false);
+  });
+
+  it('should write normalized JSONL records when enabled', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-1',
+      runId: 'run-1',
+      provider: 'opencode',
+      step: 'implement',
+      enabled: true,
+    });
+
+    const original = vi.fn();
+    const wrapped = logger.wrapCallback(original);
+
+    wrapped({
+      type: 'tool_use',
+      data: {
+        tool: 'Read',
+        id: 'call-123',
+        messageId: 'msg-123',
+        requestId: 'req-123',
+        sessionID: 'session-abc',
+      },
+    });
+
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(existsSync(logger.filepath)).toBe(true);
+
+    const lines = readFileSync(logger.filepath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+
+    const parsed = JSON.parse(lines[0]!) as {
+      provider: ProviderType;
+      event_type: string;
+      run_id: string;
+      step: string;
+      session_id?: string;
+      call_id?: string;
+      message_id?: string;
+      request_id?: string;
+      data: Record<string, unknown>;
+    };
+
+    expect(parsed.provider).toBe('opencode');
+    expect(parsed.event_type).toBe('tool_use');
+    expect(parsed.run_id).toBe('run-1');
+    expect(parsed.step).toBe('implement');
+    expect(parsed.session_id).toBe('session-abc');
+    expect(parsed.call_id).toBe('call-123');
+    expect(parsed.message_id).toBe('msg-123');
+    expect(parsed.request_id).toBe('req-123');
+    expect(parsed.data['tool']).toBe('Read');
+  });
+
+  it('should keep provider-events filename suffix for backward compatibility', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-compat',
+      runId: 'run-compat',
+      provider: 'claude',
+      step: 'plan',
+      enabled: true,
+    });
+
+    expect(logger.filepath.endsWith('-provider-events.jsonl')).toBe(true);
+    expect(logger.filepath.endsWith('-usage-events.jsonl')).toBe(false);
+  });
+
+  it('should update step and provider for subsequent events', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-2',
+      runId: 'run-2',
+      provider: 'claude',
+      step: 'plan',
+      enabled: true,
+    });
+
+    const wrapped = logger.wrapCallback();
+
+    wrapped({ type: 'init', data: { model: 'sonnet', sessionId: 's-1' } });
+    logger.setStep('implement');
+    logger.setProvider('codex');
+    wrapped({ type: 'result', data: { result: 'ok', sessionId: 's-1', success: true } });
+
+    const lines = readFileSync(logger.filepath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+
+    const first = JSON.parse(lines[0]!) as { provider: ProviderType; step: string };
+    const second = JSON.parse(lines[1]!) as { provider: ProviderType; step: string };
+
+    expect(first.provider).toBe('claude');
+    expect(first.step).toBe('plan');
+    expect(second.provider).toBe('codex');
+    expect(second.step).toBe('implement');
+  });
+
+  it('should not write records when disabled', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-3',
+      runId: 'run-3',
+      provider: 'claude',
+      step: 'plan',
+      enabled: false,
+    });
+
+    const original = vi.fn();
+    const wrapped = logger.wrapCallback(original);
+    wrapped({ type: 'text', data: { text: 'hello' } });
+
+    expect(original).toHaveBeenCalledTimes(1);
+    expect(existsSync(logger.filepath)).toBe(false);
+  });
+
+  it('should truncate long text fields', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-4',
+      runId: 'run-4',
+      provider: 'claude',
+      step: 'plan',
+      enabled: true,
+    });
+
+    const wrapped = logger.wrapCallback();
+    const longText = 'a'.repeat(11_000);
+    wrapped({ type: 'text', data: { text: longText } });
+
+    const line = readFileSync(logger.filepath, 'utf-8').trim();
+    const parsed = JSON.parse(line) as { data: { text: string } };
+
+    expect(parsed.data.text.length).toBeLessThan(longText.length);
+    expect(parsed.data.text).toContain('...[truncated]');
+  });
+
+  it('should report file write failures to stderr only once', () => {
+    const logger = createProviderEventLogger({
+      logsDir: join(tempDir, 'missing', 'nested'),
+      sessionId: 'session-err',
+      runId: 'run-err',
+      provider: 'claude',
+      step: 'plan',
+      enabled: true,
+    });
+
+    const original = vi.fn();
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const wrapped = logger.wrapCallback(original);
+      wrapped({ type: 'text', data: { text: 'first' } });
+      wrapped({ type: 'text', data: { text: 'second' } });
+
+      expect(original).toHaveBeenCalledTimes(2);
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      expect(stderrSpy.mock.calls[0]?.[0]).toContain('Failed to write provider event log');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('should write init event records with typed data objects', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-5',
+      runId: 'run-5',
+      provider: 'codex',
+      step: 'implement',
+      enabled: true,
+    });
+
+    const wrapped = logger.wrapCallback();
+    wrapped({
+      type: 'init',
+      data: {
+        model: 'gpt-5-codex',
+        sessionId: 'thread-1',
+      },
+    });
+
+    const line = readFileSync(logger.filepath, 'utf-8').trim();
+    const parsed = JSON.parse(line) as {
+      provider: ProviderType;
+      event_type: string;
+      session_id?: string;
+      data: { model: string; sessionId: string };
+    };
+
+    expect(parsed.provider).toBe('codex');
+    expect(parsed.event_type).toBe('init');
+    expect(parsed.session_id).toBe('thread-1');
+    expect(parsed.data.model).toBe('gpt-5-codex');
+    expect(parsed.data.sessionId).toBe('thread-1');
+  });
+});

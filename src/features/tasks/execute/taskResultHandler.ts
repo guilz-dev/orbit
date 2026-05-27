@@ -1,0 +1,153 @@
+import { type TaskInfo, type TaskResult, TaskRunner } from '../../../infra/task/index.js';
+import { error, info, success } from '../../../shared/ui/index.js';
+import { getErrorMessage } from '../../../shared/utils/index.js';
+import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
+
+interface BuildTaskResultParams {
+  task: TaskInfo;
+  runResult: WorkflowExecutionResult;
+  startedAt: string;
+  completedAt: string;
+  branch?: string;
+  worktreePath?: string;
+  prUrl?: string;
+}
+
+interface BuildBooleanTaskResultParams {
+  task: TaskInfo;
+  taskSuccess: boolean;
+  startedAt: string;
+  completedAt: string;
+  successResponse: string;
+  failureResponse: string;
+  branch?: string;
+  worktreePath?: string;
+}
+
+interface PersistTaskResultOptions {
+  emitStatusLog?: boolean;
+}
+
+interface PersistTaskErrorOptions {
+  emitStatusLog?: boolean;
+  responsePrefix?: string;
+}
+
+export function buildTaskResult(params: BuildTaskResultParams): TaskResult {
+  const { task, runResult, startedAt, completedAt, branch, worktreePath, prUrl } = params;
+  const taskSuccess = runResult.success;
+
+  if (!taskSuccess && !runResult.reason) {
+    throw new Error('Task failed without reason');
+  }
+
+  return {
+    task,
+    success: taskSuccess,
+    response: taskSuccess ? 'Task completed successfully' : runResult.reason!,
+    executionLog: runResult.lastMessage ? [runResult.lastMessage] : [],
+    failureStep: runResult.lastStep,
+    failureLastMessage: runResult.lastMessage,
+    startedAt,
+    completedAt,
+    ...(branch ? { branch } : {}),
+    ...(worktreePath ? { worktreePath } : {}),
+    ...(prUrl ? { prUrl } : {}),
+  };
+}
+
+export function buildBooleanTaskResult(params: BuildBooleanTaskResultParams): TaskResult {
+  const {
+    task,
+    taskSuccess,
+    startedAt,
+    completedAt,
+    successResponse,
+    failureResponse,
+    branch,
+    worktreePath,
+  } = params;
+
+  return {
+    task,
+    success: taskSuccess,
+    response: taskSuccess ? successResponse : failureResponse,
+    executionLog: [],
+    startedAt,
+    completedAt,
+    ...(branch ? { branch } : {}),
+    ...(worktreePath ? { worktreePath } : {}),
+  };
+}
+
+export function persistPrFailedTaskResult(
+  taskRunner: TaskRunner,
+  taskResult: TaskResult,
+  prError: string,
+): void {
+  taskRunner.prFailTask(taskResult, prError);
+  info(`Task "${taskResult.task.name}" completed (PR creation failed)`);
+}
+
+export function persistTaskResult(
+  taskRunner: TaskRunner,
+  taskResult: TaskResult,
+  options?: PersistTaskResultOptions,
+): void {
+  const emitStatusLog = options?.emitStatusLog !== false;
+  if (taskResult.success) {
+    taskRunner.completeTask(taskResult);
+    if (emitStatusLog) {
+      success(`Task "${taskResult.task.name}" completed`);
+    }
+    return;
+  }
+
+  taskRunner.failTask(taskResult);
+  if (emitStatusLog) {
+    error(`Task "${taskResult.task.name}" failed`);
+  }
+}
+
+export function persistExceededTaskResult(
+  taskRunner: TaskRunner,
+  task: TaskInfo,
+  exceeded: ExceededInfo,
+  context?: { worktreePath?: string; branch?: string },
+): void {
+  taskRunner.exceedTask(task.name, {
+    currentStep: exceeded.currentStep,
+    newMaxSteps: exceeded.newMaxSteps,
+    currentIteration: exceeded.currentIteration,
+    ...(exceeded.resumePoint ? { resumePoint: exceeded.resumePoint } : {}),
+    ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
+    ...(context?.branch ? { branch: context.branch } : {}),
+  });
+  info(`Task "${task.name}" exceeded iteration limit at step "${exceeded.currentStep}"`);
+}
+
+export function persistTaskError(
+  taskRunner: TaskRunner,
+  task: TaskInfo,
+  startedAt: string,
+  completedAt: string,
+  err: unknown,
+  options?: PersistTaskErrorOptions,
+): void {
+  const emitStatusLog = options?.emitStatusLog !== false;
+  const responsePrefix = options?.responsePrefix ?? '';
+  taskRunner.failTask({
+    task,
+    success: false,
+    response: `${responsePrefix}${getErrorMessage(err)}`,
+    executionLog: [],
+    startedAt,
+    completedAt,
+    ...(task.data?.branch ? { branch: task.data.branch } : {}),
+    ...(task.worktreePath ? { worktreePath: task.worktreePath } : {}),
+  });
+
+  if (emitStatusLog) {
+    error(`Task "${task.name}" error: ${getErrorMessage(err)}`);
+  }
+}

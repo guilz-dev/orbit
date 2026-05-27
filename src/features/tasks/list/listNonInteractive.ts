@@ -1,0 +1,117 @@
+/**
+ * Non-interactive list mode.
+ *
+ * Handles --non-interactive output (text/JSON) and
+ * non-interactive branch actions (--action, --branch).
+ */
+
+import {
+  TaskRunner,
+  serializeTaskListItemForJson,
+  type TaskListItem,
+} from '../../../infra/task/index.js';
+import { info } from '../../../shared/ui/index.js';
+import {
+  type ListAction,
+  tryMergeBranch,
+  mergeBranch,
+  deleteBranch,
+  showDiffStatForTask,
+  syncBranchWithRoot,
+} from './taskActions.js';
+import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
+
+export interface ListNonInteractiveOptions {
+  enabled: boolean;
+  action?: string;
+  branch?: string;
+  format?: string;
+  yes?: boolean;
+}
+
+function isValidAction(action: string): action is ListAction {
+  return action === 'diff' || action === 'sync' || action === 'try' || action === 'merge' || action === 'delete';
+}
+
+function printNonInteractiveList(tasks: TaskListItem[], format?: string): void {
+  const outputFormat = format ?? 'text';
+  if (outputFormat === 'json') {
+    // stdout に直接出力（JSON パース用途のため UI ヘルパーを経由しない）
+    console.log(JSON.stringify({
+      tasks: tasks.map(serializeTaskListItemForJson),
+    }, null, 2));
+    return;
+  }
+
+  for (const task of tasks) {
+    info(`${formatTaskStatusLabel(task)} - ${task.summary ?? task.content} (${formatShortDate(task.createdAt)})`);
+  }
+}
+
+/**
+ * Run list-tasks in non-interactive mode.
+ */
+export async function listTasksNonInteractive(
+  cwd: string,
+  nonInteractive: ListNonInteractiveOptions,
+): Promise<void> {
+  const runner = new TaskRunner(cwd);
+  const tasks = runner.listAllTaskItems();
+
+  if (tasks.length === 0) {
+    if (nonInteractive.format === 'json') {
+      console.log(JSON.stringify({ tasks: [] }, null, 2));
+      return;
+    }
+    info('No tasks to list.');
+    return;
+  }
+
+  if (!nonInteractive.action) {
+    printNonInteractiveList(tasks, nonInteractive.format);
+    return;
+  }
+
+  // Completed-task branch-targeted action (--branch)
+  if (!nonInteractive.branch) {
+    info('Missing --branch for non-interactive action.');
+    process.exit(1);
+  }
+
+  if (!isValidAction(nonInteractive.action)) {
+    info('Invalid --action. Use one of: diff, sync, try, merge, delete.');
+    process.exit(1);
+  }
+
+  const task = tasks.find((entry) => entry.kind === 'completed' && entry.branch === nonInteractive.branch);
+  if (!task) {
+    info(`Branch not found: ${nonInteractive.branch}`);
+    process.exit(1);
+  }
+
+  switch (nonInteractive.action) {
+    case 'diff':
+      showDiffStatForTask(cwd, task);
+      return;
+    case 'try':
+      tryMergeBranch(cwd, task);
+      return;
+    case 'sync':
+      await syncBranchWithRoot(cwd, task);
+      return;
+    case 'merge':
+      if (mergeBranch(cwd, task)) {
+        runner.deleteTask(task.name, 'completed');
+      }
+      return;
+    case 'delete':
+      if (!nonInteractive.yes) {
+        info('Delete requires --yes in non-interactive mode.');
+        process.exit(1);
+      }
+      if (deleteBranch(cwd, task)) {
+        runner.deleteTask(task.name, 'completed');
+      }
+      return;
+  }
+}

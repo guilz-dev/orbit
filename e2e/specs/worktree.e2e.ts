@@ -1,0 +1,55 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
+import { createTestRepo, type TestRepo } from '../helpers/test-repo';
+import { runTakt } from '../helpers/takt-runner';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// E2E更新時は docs/testing/e2e.md も更新すること
+describe('E2E: Removed --create-worktree option', () => {
+  let isolatedEnv: IsolatedEnv;
+  let testRepo: TestRepo;
+
+  beforeEach(() => {
+    isolatedEnv = createIsolatedEnv();
+    testRepo = createTestRepo();
+  });
+
+  afterEach(() => {
+    try {
+      testRepo.cleanup();
+    } catch {
+      // best-effort
+    }
+    try {
+      isolatedEnv.cleanup();
+    } catch {
+      // best-effort
+    }
+  });
+
+  it('should fail fast with migration guidance', () => {
+    const workflowPath = resolve(__dirname, '../fixtures/workflows/simple.yaml');
+
+    const result = runTakt({
+      args: [
+        '--task', 'Add a line "worktree test" to README.md',
+        '--workflow', workflowPath,
+        '--create-worktree', 'yes',
+      ],
+      cwd: testRepo.path,
+      env: isolatedEnv.env,
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    const combined = result.stdout + result.stderr;
+    expect(
+      combined.includes('--create-worktree has been removed')
+      || combined.includes("unknown option '--create-worktree'"),
+    ).toBe(true);
+  }, 240_000);
+});

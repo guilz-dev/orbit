@@ -1,0 +1,101 @@
+/**
+ * Core type definitions for TAKT orchestration system
+ *
+ * This file re-exports all types from categorized sub-modules.
+ * Consumers import from './types.js' — no path changes needed.
+ */
+
+// Status and classification types
+export type {
+  AgentType,
+  Status,
+  RuleMatchMethod,
+  PermissionMode,
+} from './status.js';
+
+// Agent response
+export type {
+  AgentErrorKind,
+  AgentResponse,
+  ProviderUsageSnapshot,
+  RateLimitInfo,
+} from './response.js';
+
+// Session state (authoritative definition with createSessionState)
+export type {
+  SessionState,
+} from './session.js';
+
+// Part decomposition
+export type {
+  PartDefinition,
+  PartResult,
+  TeamLeaderConfig,
+} from './part.js';
+
+// Workflow configuration and runtime state
+export type {
+  WorkflowRule,
+  WorkflowMaxSteps,
+  WorkflowStructuredOutput,
+  WorkflowPrListWhere,
+  WorkflowSystemInput,
+  WorkflowEffect,
+  WorkflowEnqueueBaseBranchConfig,
+  WorkflowEnqueueIssueConfig,
+  WorkflowEnqueueWorktreeConfig,
+  WorkflowTemplateReference,
+  WorkflowEffectScalarReference,
+  OutputContractItem,
+  OutputContractEntry,
+  McpServerConfig,
+  RuntimePreparePreset,
+  RuntimePrepareEntry,
+  WorkflowRuntimeConfig,
+  WorkflowStepKind,
+  WorkflowCallOverrides,
+  WorkflowPromotionEntry,
+  WorkflowParamType,
+  WorkflowParamFacetKind,
+  WorkflowCallArgValue,
+  WorkflowSubworkflowParamConfig,
+  WorkflowSubworkflowConfig,
+  WorkflowResumePointEntry,
+  WorkflowResumePoint,
+  StepProviderOptions,
+  AgentWorkflowStep,
+  SystemWorkflowStep,
+  WorkflowCallStep,
+  WorkflowStep,
+  ArpeggioStepConfig,
+  ArpeggioMergeStepConfig,
+  LoopDetectionConfig,
+  LoopMonitorConfig,
+  LoopMonitorJudge,
+  LoopMonitorRule,
+  RateLimitFallbackConfig,
+  RateLimitFallbackProvider,
+  FallbackContext,
+  WorkflowConfig,
+  WorkflowState,
+} from './workflow-types.js';
+
+
+// Provider permission profiles
+export type {
+  ProviderProfileName,
+  ProviderPermissionProfile,
+  ProviderPermissionProfiles,
+} from './provider-profiles.js';
+
+// Configuration types (global and project)
+export type {
+  PersonaProviderEntry,
+  CustomAgentConfig,
+  LoggingConfig,
+  ObservabilityConfig,
+  ResolvedObservabilityConfig,
+  Language,
+  PipelineConfig,
+  ProjectConfig,
+} from './config-types.js';

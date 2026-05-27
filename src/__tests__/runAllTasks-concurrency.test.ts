@@ -1,0 +1,985 @@
+/**
+ * Tests for runAllTasks concurrency support (worker pool)
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { TaskInfo } from '../infra/task/index.js';
+
+const { mockLoadConfigRaw } = vi.hoisted(() => ({
+  mockLoadConfigRaw: vi.fn(() => ({
+    language: 'en',
+    defaultWorkflow: 'default',
+    logLevel: 'info',
+    concurrency: 1,
+    taskPollIntervalMs: 500,
+  })),
+}));
+
+// Mock dependencies before importing the module under test
+vi.mock('../infra/config/index.js', () => ({
+  loadWorkflowByIdentifier: vi.fn(),
+  isWorkflowPath: vi.fn(() => false),
+  loadConfig: (...args: unknown[]) => {
+    const raw = mockLoadConfigRaw(...args) as Record<string, unknown>;
+    if ('global' in raw && 'project' in raw) {
+      return raw;
+    }
+    return {
+      global: raw,
+      project: { workflow: 'default' },
+    };
+  },
+  resolveWorkflowConfigValues: (_projectDir: string, keys: readonly string[]) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = config[key];
+    }
+    return result;
+  },
+  resolveWorkflowConfigValue: (_projectDir: string, key: string) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, provider: 'claude', verbose: false };
+    return config[key];
+  },
+  resolveConfigValueWithSource: (_projectDir: string, key: string) => {
+    const raw = mockLoadConfigRaw() as Record<string, unknown>;
+    const config = ('global' in raw && 'project' in raw)
+      ? { ...raw.global as Record<string, unknown>, ...raw.project as Record<string, unknown> }
+      : { ...raw, workflow: 'default', provider: 'claude', verbose: false };
+    return { value: config[key], source: 'project' };
+  },
+}));
+
+const mockLoadConfig = mockLoadConfigRaw;
+
+function buildUpdatedTaskInfo(
+  taskName: string,
+  execution: { runSlug: string; worktreePath?: string; branch?: string },
+): TaskInfo {
+  return {
+    name: taskName,
+    content: `Task: ${taskName}`,
+    filePath: `/tasks/${taskName}.yaml`,
+    createdAt: '2026-02-09T00:00:00.000Z',
+    status: 'running',
+    runSlug: execution.runSlug,
+    worktreePath: execution.worktreePath,
+    data: {
+      task: `Task: ${taskName}`,
+      workflow: 'default',
+      ...(execution.branch ? { branch: execution.branch } : {}),
+    },
+  };
+}
+
+const {
+  mockClaimNextTasks,
+  mockCompleteTask,
+  mockFailTask,
+  mockRecoverInterruptedRunningTasks,
+  mockListAllTaskItems,
+  mockUpdateRunningTaskExecution,
+  mockNotifySuccess,
+  mockNotifyError,
+  mockSendSlackNotification,
+  mockGetSlackWebhookUrl,
+} = vi.hoisted(() => ({
+  mockClaimNextTasks: vi.fn(),
+  mockCompleteTask: vi.fn(),
+  mockFailTask: vi.fn(),
+  mockRecoverInterruptedRunningTasks: vi.fn(),
+  mockListAllTaskItems: vi.fn().mockReturnValue([]),
+  mockUpdateRunningTaskExecution: vi.fn(buildUpdatedTaskInfo),
+  mockNotifySuccess: vi.fn(),
+  mockNotifyError: vi.fn(),
+  mockSendSlackNotification: vi.fn(),
+  mockGetSlackWebhookUrl: vi.fn(),
+}));
+
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  TaskRunner: vi.fn().mockImplementation(() => ({
+    claimNextTasks: mockClaimNextTasks,
+    completeTask: mockCompleteTask,
+    failTask: mockFailTask,
+    recoverInterruptedRunningTasks: mockRecoverInterruptedRunningTasks,
+    listAllTaskItems: mockListAllTaskItems,
+    updateRunningTaskExecution: mockUpdateRunningTaskExecution,
+  })),
+}));
+
+vi.mock('../infra/task/clone.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createSharedClone: vi.fn(),
+  removeClone: vi.fn(),
+}));
+
+vi.mock('../infra/task/branchList.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  detectDefaultBranch: vi.fn(() => 'main'),
+}));
+
+vi.mock('../infra/task/git.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getCurrentBranch: vi.fn(() => 'main'),
+}));
+
+vi.mock('../infra/task/autoCommit.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  autoCommitAndPush: vi.fn(),
+}));
+
+vi.mock('../infra/task/summarize.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  summarizeTaskName: vi.fn(),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  header: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  success: vi.fn(),
+  status: vi.fn(),
+  blankLine: vi.fn(),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({
+    trace: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+  }),
+  getErrorMessage: vi.fn((e) => e.message),
+  notifySuccess: mockNotifySuccess,
+  notifyError: mockNotifyError,
+  sendSlackNotification: mockSendSlackNotification,
+  getSlackWebhookUrl: mockGetSlackWebhookUrl,
+}));
+
+vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
+  executeWorkflow: vi.fn(() => Promise.resolve({ success: true })),
+  executeWorkflowForRun: vi.fn(() => Promise.resolve({ success: true })),
+}));
+
+vi.mock('../shared/context.js', () => ({
+  isQuietMode: vi.fn(() => false),
+}));
+
+vi.mock('../shared/constants.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  DEFAULT_WORKFLOW_NAME: 'default',
+  DEFAULT_LANGUAGE: 'en',
+}));
+
+vi.mock('../infra/github/index.js', () => ({
+  buildPrBody: vi.fn(),
+}));
+
+vi.mock('../infra/claude/query-manager.js', () => ({
+  interruptAllQueries: vi.fn(),
+}));
+
+vi.mock('../shared/exitCodes.js', () => ({
+  EXIT_SIGINT: 130,
+}));
+
+vi.mock('../shared/i18n/index.js', () => ({
+  getLabel: vi.fn((key: string) => key),
+}));
+
+import { info, header, status, success, error as errorFn } from '../shared/ui/index.js';
+import { runAllTasks } from '../features/tasks/index.js';
+import { executeWorkflow, executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+
+const mockInfo = vi.mocked(info);
+const mockHeader = vi.mocked(header);
+const mockStatus = vi.mocked(status);
+const mockSuccess = vi.mocked(success);
+const mockError = vi.mocked(errorFn);
+const mockExecuteWorkflow = vi.mocked(executeWorkflow);
+const mockExecuteWorkflowForRun = vi.mocked(executeWorkflowForRun);
+const mockLoadWorkflowByIdentifier = vi.mocked(loadWorkflowByIdentifier);
+
+function createTask(name: string): TaskInfo {
+  return {
+    name,
+    content: `Task: ${name}`,
+    filePath: `/tasks/${name}.yaml`,
+    createdAt: '2026-02-09T00:00:00.000Z',
+    status: 'pending',
+    data: {
+      task: `Task: ${name}`,
+      workflow: 'default',
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockRecoverInterruptedRunningTasks.mockReturnValue(0);
+  mockUpdateRunningTaskExecution.mockImplementation(buildUpdatedTaskInfo);
+});
+
+describe('runAllTasks concurrency', () => {
+  describe('sequential execution (concurrency=1)', () => {
+    beforeEach(() => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+    });
+
+    it('should show no-tasks message when no tasks exist', async () => {
+      // Given: No pending tasks
+      mockClaimNextTasks.mockReturnValue([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockInfo).toHaveBeenCalledWith('No pending tasks in .takt/tasks.yaml');
+    });
+
+    it('should execute tasks sequentially via worker pool when concurrency is 1', async () => {
+      // Given: Two tasks available sequentially
+      const task1 = createTask('task-1');
+      const task2 = createTask('task-2');
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([task2])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: Worker pool uses claimNextTasks for fetching more tasks
+      expect(mockClaimNextTasks).toHaveBeenCalled();
+      expect(mockStatus).toHaveBeenCalledWith('Total', '2');
+    });
+  });
+
+  describe('parallel execution (concurrency>1)', () => {
+    beforeEach(() => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 3,
+        taskPollIntervalMs: 500,
+      });
+    });
+
+    it('should display concurrency info when concurrency > 1', async () => {
+      // Given: Tasks available
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockInfo).toHaveBeenCalledWith('Concurrency: 3');
+    });
+
+    it('should execute tasks using worker pool when concurrency > 1', async () => {
+      // Given: 3 tasks available
+      const task1 = createTask('task-1');
+      const task2 = createTask('task-2');
+      const task3 = createTask('task-3');
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2, task3])
+        .mockReturnValueOnce([]);
+
+      // In parallel mode, task start messages go through TaskPrefixWriter → process.stdout.write
+      const stdoutChunks: string[] = [];
+      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+        stdoutChunks.push(String(chunk));
+        return true;
+      });
+
+      // When
+      await runAllTasks('/project');
+      writeSpy.mockRestore();
+
+      // Then: Task names displayed with prefix in stdout
+      const allOutput = stdoutChunks.join('');
+      expect(allOutput).toContain('[task]');
+      expect(allOutput).toContain('=== Task: task-1 ===');
+      expect(allOutput).toContain('[task]');
+      expect(allOutput).toContain('=== Task: task-2 ===');
+      expect(allOutput).toContain('[task]');
+      expect(allOutput).toContain('=== Task: task-3 ===');
+      expect(mockStatus).toHaveBeenCalledWith('Total', '3');
+    });
+
+    it('should fill slots as tasks complete (worker pool behavior)', async () => {
+      // Given: 5 tasks, concurrency=3
+      // Worker pool should start 3, then fill slots as tasks complete
+      const tasks = Array.from({ length: 5 }, (_, i) => createTask(`task-${i + 1}`));
+
+      mockClaimNextTasks
+        .mockReturnValueOnce(tasks.slice(0, 3))
+        .mockReturnValueOnce(tasks.slice(3, 5))
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: All 5 tasks executed
+      expect(mockStatus).toHaveBeenCalledWith('Total', '5');
+    });
+  });
+
+  describe('default concurrency', () => {
+    it('should default to sequential when concurrency is not set', async () => {
+      // Given: Config without explicit concurrency (defaults to 1)
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: false,
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: No concurrency info displayed
+      const concurrencyInfoCalls = mockInfo.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('Concurrency:')
+      );
+      expect(concurrencyInfoCalls).toHaveLength(0);
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('parallel execution behavior', () => {
+    const fakeWorkflowConfig = {
+      name: 'default',
+      steps: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialStep: 'implement',
+      maxSteps: 10,
+    };
+
+    beforeEach(() => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        concurrency: 3,
+        taskPollIntervalMs: 500,
+      });
+      // Return a valid workflow config so executeTask reaches executeWorkflow
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
+    });
+
+    it('should run tasks concurrently, not sequentially', async () => {
+      // Given: 2 tasks with delayed execution to verify concurrency
+      const task1 = createTask('slow-1');
+      const task2 = createTask('slow-2');
+
+      const executionOrder: string[] = [];
+
+      // Each task remains pending until its timer fires. Sequential execution would record
+      // end:slow-1 before start:slow-2, so order is enough to prove concurrency.
+      mockExecuteWorkflow.mockImplementation((_config, task) => {
+        executionOrder.push(`start:${task}`);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            executionOrder.push(`end:${task}`);
+            resolve({ success: true });
+          }, 300);
+        });
+      });
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: Both tasks started before either completed (concurrent execution)
+      expect(executionOrder.slice(0, 2)).toEqual([
+        'start:Task: slow-1',
+        'start:Task: slow-2',
+      ]);
+      expect(executionOrder.findIndex((entry) => entry.startsWith('end:'))).toBe(2);
+    });
+
+    it('should fill slots immediately when a task completes (no batch waiting)', async () => {
+      // Given: 3 tasks, concurrency=2, task1 finishes quickly, task2 takes longer
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        concurrency: 2,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('fast');
+      const task2 = createTask('slow');
+      const task3 = createTask('after-fast');
+
+      const executionOrder: string[] = [];
+
+      mockExecuteWorkflow.mockImplementation((_config, task) => {
+        executionOrder.push(`start:${task}`);
+        const delay = (task as string).includes('slow') ? 80 : 20;
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            executionOrder.push(`end:${task}`);
+            resolve({ success: true });
+          }, delay);
+        });
+      });
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2])
+        .mockReturnValueOnce([task3])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: task3 starts before task2 finishes (slot filled immediately)
+      const task3StartIdx = executionOrder.indexOf('start:Task: after-fast');
+      const task2EndIdx = executionOrder.indexOf('end:Task: slow');
+      expect(task3StartIdx).toBeLessThan(task2EndIdx);
+      expect(mockStatus).toHaveBeenCalledWith('Total', '3');
+    });
+
+    it('should count partial failures correctly', async () => {
+      // Given: 3 tasks, 1 fails, 2 succeed
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runAbort: true },
+        concurrency: 3,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('pass-1');
+      const task2 = createTask('fail-1');
+      const task3 = createTask('pass-2');
+
+      let callIndex = 0;
+      mockExecuteWorkflow.mockImplementation(() => {
+        callIndex++;
+        // Second call fails
+        return Promise.resolve({ success: callIndex !== 2 });
+      });
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2, task3])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: Correct success/fail counts
+      expect(mockStatus).toHaveBeenCalledWith('Total', '3');
+      expect(mockStatus).toHaveBeenCalledWith('Success', '2', undefined);
+      expect(mockStatus).toHaveBeenCalledWith('Failed', '1', 'red');
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+      expect(mockNotifyError).toHaveBeenCalledTimes(1);
+    });
+
+    it('should persist failure reason and step when workflow aborts', async () => {
+      const task1 = createTask('fail-with-detail');
+
+      mockExecuteWorkflow.mockResolvedValue({
+        success: false,
+        reason: 'blocked_by_review',
+        lastStep: 'review',
+        lastMessage: 'security check failed',
+      });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockFailTask).toHaveBeenCalledWith(expect.objectContaining({
+        response: 'blocked_by_review',
+        failureStep: 'review',
+        failureLastMessage: 'security check failed',
+      }));
+    });
+
+    it('should pass abortSignal and taskPrefix to executeWorkflow in parallel mode', async () => {
+      // Given: One task in parallel mode
+      const task1 = createTask('parallel-task');
+
+      mockExecuteWorkflow.mockResolvedValue({ success: true });
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: executeWorkflow received abortSignal and taskPrefix options
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const callArgs = mockExecuteWorkflow.mock.calls[0];
+      const workflowOptions = callArgs?.[3]; // 4th argument is options
+      expect(workflowOptions).toHaveProperty('abortSignal');
+      expect(workflowOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(workflowOptions).toHaveProperty('taskPrefix', 'parallel-task');
+    });
+
+    it('should pass ignoreIterationLimit to executeWorkflow when runAllTasks receives ignoreExceed', async () => {
+      const task1 = createTask('ignore-exceed-task');
+
+      mockExecuteWorkflowForRun.mockResolvedValue({ success: true });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project', {
+        ignoreExceed: true,
+      } as never);
+
+      expect(mockExecuteWorkflowForRun).toHaveBeenCalledTimes(1);
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      const runContext = mockExecuteWorkflowForRun.mock.calls[0]?.[4] as {
+        ignoreIterationLimit?: boolean;
+      };
+      expect(runContext?.ignoreIterationLimit).toBe(true);
+    });
+
+    it('should pass abortSignal but not taskPrefix in sequential mode', async () => {
+      // Given: Sequential mode
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true, runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('sequential-task');
+      mockExecuteWorkflow.mockResolvedValue({ success: true });
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: executeWorkflow should have abortSignal but not taskPrefix
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      const callArgs = mockExecuteWorkflow.mock.calls[0];
+      const workflowOptions = callArgs?.[3];
+      expect(workflowOptions?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(workflowOptions?.taskPrefix).toBeUndefined();
+    });
+
+    it('should only notify once at run completion when multiple tasks succeed', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: true },
+        concurrency: 3,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      const task2 = createTask('task-2');
+      const task3 = createTask('task-3');
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1, task2, task3])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockNotifySuccess).toHaveBeenCalledTimes(1);
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should not notify run completion when runComplete is explicitly false', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runComplete: false },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should notify run completion by default when notification_sound_events is not set', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockNotifySuccess).toHaveBeenCalledTimes(1);
+      expect(mockNotifySuccess).toHaveBeenCalledWith('TAKT', 'run.notifyComplete');
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should notify run abort by default when notification_sound_events is not set', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+      expect(mockNotifyError).toHaveBeenCalledTimes(1);
+      expect(mockNotifyError).toHaveBeenCalledWith('TAKT', 'run.notifyAbort');
+    });
+
+    it('should not notify run abort when runAbort is explicitly false', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runAbort: false },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      await runAllTasks('/project');
+
+      expect(mockNotifySuccess).not.toHaveBeenCalled();
+      expect(mockNotifyError).not.toHaveBeenCalled();
+    });
+
+    it('should notify run abort and rethrow when worker pool throws', async () => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        notificationSound: true,
+        notificationSoundEvents: { runAbort: true },
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+
+      const task1 = createTask('task-1');
+      const poolError = new Error('worker pool crashed');
+
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockImplementationOnce(() => {
+          throw poolError;
+        });
+
+      await expect(runAllTasks('/project')).rejects.toThrow('worker pool crashed');
+      expect(mockNotifyError).toHaveBeenCalledTimes(1);
+      expect(mockNotifyError).toHaveBeenCalledWith('TAKT', 'run.notifyAbort');
+    });
+  });
+
+  describe('Slack webhook notification', () => {
+    const webhookUrl = 'https://hooks.slack.com/services/T00/B00/xxx';
+    const fakeWorkflowConfig = {
+      name: 'default',
+      steps: [{ name: 'implement', personaDisplayName: 'coder' }],
+      initialStep: 'implement',
+      maxSteps: 10,
+    };
+
+    beforeEach(() => {
+      mockLoadConfig.mockReturnValue({
+        language: 'en',
+        defaultWorkflow: 'default',
+        logLevel: 'info',
+        concurrency: 1,
+        taskPollIntervalMs: 500,
+      });
+      mockLoadWorkflowByIdentifier.mockReturnValue(fakeWorkflowConfig as never);
+    });
+
+    it('should send Slack notification on success when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:30.000Z',
+          branch: 'feat/task-1',
+          prUrl: 'https://github.com/org/repo/pull/10',
+          data: { task: 'task-1', workflow: 'default', issue: 42 },
+        },
+      ]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('total=1');
+      expect(message).toContain('success=1');
+      expect(message).toContain('failed=0');
+      expect(message).toContain('task-1');
+      expect(message).toContain('workflow=default');
+      expect(message).toContain('issue=#42');
+      expect(message).toContain('duration=30s');
+      expect(message).toContain('pr=https://github.com/org/repo/pull/10');
+    });
+
+    it('should send Slack notification on failure when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      mockExecuteWorkflow.mockResolvedValueOnce({ success: false, reason: 'failed' });
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'failed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:45.000Z',
+          branch: 'feat/task-1',
+          data: { task: 'task-1', workflow: 'review' },
+          failure: { step: 'ai_review', error: 'Lint failed', last_message: 'Fix attempt timed out' },
+        },
+      ]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('total=1');
+      expect(message).toContain('failed=1');
+      expect(message).toContain('task-1');
+      expect(message).toContain('workflow=review');
+      expect(message).toContain('duration=45s');
+      expect(message).toContain('step=ai_review');
+      expect(message).toContain('error=Lint failed');
+    });
+
+    it('should send Slack notification on exception when webhook URL is set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      const poolError = new Error('worker pool crashed');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockImplementationOnce(() => {
+          throw poolError;
+        });
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:15.000Z',
+          data: { task: 'task-1', workflow: 'default' },
+        },
+      ]);
+
+      // When / Then
+      await expect(runAllTasks('/project')).rejects.toThrow('worker pool crashed');
+      // Exception path sends empty executedTaskNames, so no task details in summary
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      const [url, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(url).toBe(webhookUrl);
+      expect(message).toContain('TAKT Run');
+      expect(message).toContain('total=0');
+    });
+
+    it('should exclude previously completed tasks from Slack notification', async () => {
+      // Given: webhook is set, only task-2 is pending (task-1 was completed in a prior run)
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task2 = createTask('task-2');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task2])
+        .mockReturnValueOnce([]);
+      // listAllTaskItems returns both the old completed task and the newly completed task
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-18T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-18T00:00:00.000Z',
+          completedAt: '2026-02-18T00:00:30.000Z',
+          data: { task: 'task-1', workflow: 'default' },
+        },
+        {
+          kind: 'completed',
+          name: 'task-2',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-2.yaml',
+          content: 'Task: task-2',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:20.000Z',
+          data: { task: 'task-2', workflow: 'default' },
+        },
+      ]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: only task-2 should be in the notification (task-1 was not executed this run)
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      const [, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(message).toContain('total=1');
+      expect(message).toContain('success=1');
+      expect(message).toContain('task-2');
+      expect(message).not.toContain('task-1');
+    });
+
+    it('should exclude pending/running tasks from Slack notification', async () => {
+      // Given: task-1 completes, task-2 is still running (stuck)
+      mockGetSlackWebhookUrl.mockReturnValue(webhookUrl);
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+      // listAllTaskItems returns a running task alongside the completed one
+      mockListAllTaskItems.mockReturnValue([
+        {
+          kind: 'completed',
+          name: 'task-1',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-1.yaml',
+          content: 'Task: task-1',
+          startedAt: '2026-02-19T00:00:00.000Z',
+          completedAt: '2026-02-19T00:00:30.000Z',
+          data: { task: 'task-1', workflow: 'default' },
+        },
+        {
+          kind: 'pending',
+          name: 'task-pending',
+          createdAt: '2026-02-19T00:00:00.000Z',
+          filePath: '/tasks/task-pending.yaml',
+          content: 'Task: task-pending',
+          data: { task: 'task-pending', workflow: 'default' },
+        },
+      ]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then: only task-1 (completed) should appear, not the pending task
+      expect(mockSendSlackNotification).toHaveBeenCalledOnce();
+      const [, message] = mockSendSlackNotification.mock.calls[0]! as [string, string];
+      expect(message).toContain('total=1');
+      expect(message).toContain('task-1');
+      expect(message).not.toContain('task-pending');
+    });
+
+    it('should not send Slack notification when webhook URL is not set', async () => {
+      // Given
+      mockGetSlackWebhookUrl.mockReturnValue(undefined);
+      const task1 = createTask('task-1');
+      mockClaimNextTasks
+        .mockReturnValueOnce([task1])
+        .mockReturnValueOnce([]);
+
+      // When
+      await runAllTasks('/project');
+
+      // Then
+      expect(mockSendSlackNotification).not.toHaveBeenCalled();
+    });
+  });
+});

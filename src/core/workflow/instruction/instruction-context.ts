@@ -1,0 +1,123 @@
+/**
+ * Instruction context types and edit rule generation
+ *
+ * Defines the context structures used by instruction builders.
+ */
+
+import type { AgentResponse, FallbackContext, Language, WorkflowMaxSteps, WorkflowState } from '../../models/types.js';
+
+/**
+ * Context for building instruction from template.
+ */
+export interface InstructionContext {
+  /** The main task/prompt */
+  task: string;
+  /** Current iteration number (workflow-wide turn count) */
+  iteration: number;
+  /** Maximum steps allowed */
+  maxSteps: WorkflowMaxSteps;
+  /** Current step's iteration number (how many times this step has been executed) */
+  stepIteration: number;
+  /** Working directory (agent work dir, may be a clone) */
+  cwd: string;
+  /** Project root directory (where .takt/ lives). */
+  projectCwd: string;
+  /** User inputs accumulated during workflow */
+  userInputs: string[];
+  /** Previous step output if available */
+  previousOutput?: AgentResponse;
+  /** Source path for previous response snapshot */
+  previousResponseSourcePath?: string;
+  /** Fallback context to inject once after provider switching */
+  fallbackContext?: FallbackContext;
+  /** Preprocessed previous response text for template placeholder replacement */
+  previousResponseText?: string;
+  /** Report directory path */
+  reportDir?: string;
+  /** Latest report paths for the current step */
+  currentReport?: string;
+  /** Most recent versioned report paths for the current step */
+  previousReport?: string;
+  /** Versioned report history paths for the current step */
+  reportHistory?: string;
+  /** Latest report paths for peer steps */
+  peerReports?: string;
+  /** Language for metadata rendering. Defaults to 'en'. */
+  language?: Language;
+  /** Whether interactive-only rules are enabled */
+  interactive?: boolean;
+  /** Top-level workflow steps for workflow structure display */
+  workflowSteps?: ReadonlyArray<{ name: string; description?: string }>;
+  /** Index of the current step in workflowSteps (0-based) */
+  currentStepIndex?: number;
+  /** Workflow name */
+  workflowName?: string;
+  /** Workflow description (optional) */
+  workflowDescription?: string;
+  /** Retry note explaining why task is being retried */
+  retryNote?: string;
+  /** Resolved policy content strings for injection into instruction */
+  policyContents?: string[];
+  /** Source path for policy snapshot */
+  policySourcePath?: string;
+  /** Resolved knowledge content strings for injection into instruction */
+  knowledgeContents?: string[];
+  /** Source path for knowledge snapshot */
+  knowledgeSourcePath?: string;
+  /** Workflow state for context/structured/effect interpolation */
+  workflowState?: WorkflowState;
+}
+
+/**
+ * Build the edit rule string for the execution context section.
+ *
+ * Returns a localized string describing the edit permission for this step.
+ * Returns empty string when edit is undefined (no explicit permission).
+ */
+export function buildEditRule(edit: boolean | undefined, language: Language): string {
+  if (edit === true) {
+    if (language === 'ja') {
+      return '**このステップでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。';
+    }
+    return '**Editing is ENABLED for this step.** You may create, modify, and delete files as needed to fulfill the user\'s request.';
+  }
+  if (edit === false) {
+    if (language === 'ja') {
+      return '**このステップでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。';
+    }
+    return '**Editing is DISABLED for this step.** Do NOT create, modify, or delete any project source files. You may only read and search code. Report output will be handled automatically in a later phase.';
+  }
+  return '';
+}
+
+type GitRulePhase = 'phase1' | 'phase2';
+
+export function buildGitRules(
+  allowGitCommit: boolean | undefined,
+  language: Language,
+  phase: GitRulePhase,
+): string {
+  if (allowGitCommit === true) {
+    return '';
+  }
+
+  if (language === 'ja') {
+    const rules = [
+      '- **git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
+      '- **git push を実行しないでください。** プッシュもシステムが自動で行います。',
+    ];
+    if (phase === 'phase1') {
+      rules.push('- **git add を実行しないでください。** ステージングもシステムが自動で行います。新規ファイルが未追跡（`??`）でも正常です。');
+    }
+    return rules.join('\n');
+  }
+
+  const rules = [
+    '- **Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
+    '- **Do NOT run git push.** Pushes are also handled automatically by the system.',
+  ];
+  if (phase === 'phase1') {
+    rules.push('- **Do NOT run git add.** Staging is also handled automatically by the system. Untracked files (`??`) are normal.');
+  }
+  return rules.join('\n');
+}

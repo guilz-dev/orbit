@@ -1,0 +1,24 @@
+/**
+ * Application-wide constants
+ */
+
+/** Supported language codes (duplicated from core/models to avoid shared → core dependency) */
+type Language = 'en' | 'ja';
+
+/** Default workflow name when none specified */
+export const DEFAULT_WORKFLOW_NAME = 'default';
+
+/** Default language for new installations */
+export const DEFAULT_LANGUAGE: Language = 'en';
+
+/** Slash commands recognized in interactive mode */
+export const SlashCommand = {
+  Accept: '/accept',
+  Play: '/play',
+  Go: '/go',
+  Retry: '/retry',
+  Replay: '/replay',
+  Cancel: '/cancel',
+  Resume: '/resume',
+} as const;
+export type SlashCommand = typeof SlashCommand[keyof typeof SlashCommand];

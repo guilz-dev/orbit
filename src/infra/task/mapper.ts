@@ -1,0 +1,166 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { TaskFileSchema, type TaskFileData, type TaskRecord } from './schema.js';
+import { buildTaskInstruction } from './instruction.js';
+import { firstLine } from './naming.js';
+import type { TaskInfo, TaskListItem } from './types.js';
+
+function toDisplayPath(projectDir: string, targetPath: string): string {
+  const relativePath = path.relative(projectDir, targetPath);
+  if (!relativePath || relativePath.startsWith('..')) {
+    return targetPath;
+  }
+  return relativePath;
+}
+
+export function resolveTaskContent(projectDir: string, task: TaskRecord): string {
+  if (task.content) {
+    return task.content;
+  }
+  if (task.task_dir) {
+    const taskDirPath = path.join(projectDir, task.task_dir);
+    const orderFilePath = path.join(taskDirPath, 'order.md');
+    if (!fs.existsSync(orderFilePath)) {
+      throw new Error(`Task spec file is missing: ${orderFilePath}`);
+    }
+    return buildTaskInstruction(
+      toDisplayPath(projectDir, taskDirPath),
+      toDisplayPath(projectDir, orderFilePath),
+    );
+  }
+  if (!task.content_file) {
+    throw new Error(`Task content is missing: ${task.name}`);
+  }
+
+  const contentPath = path.isAbsolute(task.content_file)
+    ? task.content_file
+    : path.join(projectDir, task.content_file);
+  return fs.readFileSync(contentPath, 'utf-8');
+}
+
+function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
+  return TaskFileSchema.parse({
+    task: content,
+    worktree: task.worktree,
+    branch: task.branch,
+    base_branch: task.base_branch,
+    workflow: task.workflow,
+    issue: task.issue,
+    start_step: task.start_step,
+    retry_note: task.retry_note,
+    auto_pr: task.auto_pr,
+    draft_pr: task.draft_pr,
+    managed_pr: task.managed_pr,
+    should_publish_branch_to_origin: task.should_publish_branch_to_origin,
+    exceeded_max_steps: task.exceeded_max_steps,
+    exceeded_current_iteration: task.exceeded_current_iteration,
+    resume_point: task.resume_point,
+    source: task.source,
+    pr_number: task.pr_number,
+  });
+}
+
+export function toTaskData(projectDir: string, task: TaskRecord): TaskFileData {
+  return buildTaskFileData(task, resolveTaskContent(projectDir, task));
+}
+
+export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskRecord): TaskInfo {
+  const content = resolveTaskContent(projectDir, task);
+  return {
+    filePath: tasksFile,
+    name: task.name,
+    slug: task.slug,
+    runSlug: task.run_slug,
+    content,
+    taskDir: task.task_dir,
+    createdAt: task.created_at,
+    status: task.status,
+    worktreePath: task.worktree_path,
+    data: buildTaskFileData(task, content),
+  };
+}
+
+export function toPendingTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'pending',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+  };
+}
+
+export function toFailedTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'failed',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+    failure: task.failure,
+  };
+}
+
+export function toPrFailedTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'pr_failed',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+    failure: task.failure,
+  };
+}
+
+export function toExceededTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'exceeded',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+    exceededMaxSteps: task.exceeded_max_steps,
+    exceededCurrentIteration: task.exceeded_current_iteration,
+  };
+}
+
+function toRunningTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'running',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+  };
+}
+
+function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  return {
+    kind: 'completed',
+    ...toBaseTaskListItem(projectDir, tasksFile, task),
+  };
+}
+
+function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
+  return {
+    name: task.name,
+    createdAt: task.created_at,
+    filePath: tasksFile,
+    content: firstLine(resolveTaskContent(projectDir, task)),
+    summary: task.summary,
+    taskDir: task.task_dir,
+    runSlug: task.run_slug,
+    branch: task.branch,
+    worktreePath: task.worktree_path,
+    prUrl: task.pr_url,
+    startedAt: task.started_at ?? undefined,
+    completedAt: task.completed_at ?? undefined,
+    ownerPid: task.owner_pid ?? undefined,
+    data: toTaskData(projectDir, task),
+    issueNumber: task.issue,
+    source: task.source,
+    prNumber: task.pr_number,
+  };
+}
+
+export function toTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): TaskListItem {
+  switch (task.status) {
+    case 'pending':
+      return toPendingTaskItem(projectDir, tasksFile, task);
+    case 'running':
+      return toRunningTaskItem(projectDir, tasksFile, task);
+    case 'completed':
+      return toCompletedTaskItem(projectDir, tasksFile, task);
+    case 'failed':
+      return toFailedTaskItem(projectDir, tasksFile, task);
+    case 'exceeded':
+      return toExceededTaskItem(projectDir, tasksFile, task);
+    case 'pr_failed':
+      return toPrFailedTaskItem(projectDir, tasksFile, task);
+  }
+}

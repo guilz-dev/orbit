@@ -1,0 +1,433 @@
+/**
+ * WorkflowEngine integration tests: error handling scenarios.
+ *
+ * Covers:
+ * - No rule matched (abort)
+ * - runAgent throws (abort)
+ * - Loop detection (abort)
+ * - Iteration limit (abort and extend)
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, rmSync } from 'node:fs';
+
+// --- Mock setup (must be before imports that use these modules) ---
+
+vi.mock('../agents/runner.js', () => ({
+  runAgent: vi.fn(),
+}));
+
+vi.mock('../core/workflow/evaluation/index.js', () => ({
+  detectMatchedRule: vi.fn(),
+}));
+
+vi.mock('../core/workflow/phase-runner.js', () => ({
+  needsStatusJudgmentPhase: vi.fn().mockReturnValue(false),
+  runReportPhase: vi.fn().mockResolvedValue(undefined),
+  runStatusJudgmentPhase: vi.fn().mockResolvedValue({ tag: '', ruleIndex: 0, method: 'auto_select' }),
+}));
+
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+}));
+
+// --- Imports (after mocks) ---
+
+import { WorkflowEngine } from '../core/workflow/index.js';
+import { runAgent } from '../agents/runner.js';
+import { detectMatchedRule } from '../core/workflow/evaluation/index.js';
+import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import {
+  makeResponse,
+  makeStep,
+  makeRule,
+  buildDefaultWorkflowConfig,
+  mockRunAgentSequence,
+  mockDetectMatchedRuleSequence,
+  createTestTmpDir,
+  applyDefaultMocks,
+} from './engine-test-helpers.js';
+
+describe('WorkflowEngine Integration: Error Handling', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // =====================================================
+  // 1. No rule matched
+  // =====================================================
+  describe('No rule matched', () => {
+    it('should abort when detectMatchedRule returns undefined', async () => {
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', content: 'Unclear output' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([undefined]);
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('plan');
+    });
+  });
+
+  // =====================================================
+  // 2. runAgent throws
+  // =====================================================
+  describe('runAgent throws', () => {
+    it('should abort when runAgent throws an error', async () => {
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      vi.mocked(runAgent).mockRejectedValueOnce(new Error('API connection failed'));
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('API connection failed');
+    });
+
+  });
+
+  // =====================================================
+  // 2.5 Phase 3 fallback
+  // =====================================================
+  describe('Phase 3 fallback', () => {
+    it('should continue with phase1 rule evaluation when status judgment throws', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      vi.mocked(needsStatusJudgmentPhase).mockReturnValue(true);
+      vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
+      expect(detectMatchedRule).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'plan' }),
+        '[STEP:1] continue',
+        '',
+        expect.any(Object),
+      );
+      expect(state.stepOutputs.get('plan')?.matchedRuleMethod).toBe('phase1_tag');
+    });
+  });
+
+  // =====================================================
+  // 3. Interrupted status routing
+  // =====================================================
+  describe('Error status', () => {
+    it('should abort immediately and skip report phase when step returns error', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'Partial response',
+          error: 'interrupted by signal',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      expect(runReportPhase).not.toHaveBeenCalled();
+    });
+
+    it('should abort when a step returns an unhandled status and skip report phase', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'pending' as never,
+          content: 'pending response',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Unhandled response status: pending');
+      expect(runReportPhase).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('runSingleIteration status routing', () => {
+    it('should abort without rule resolution when a step returns blocked', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'blocked',
+          content: 'need input',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+    });
+
+    it('should abort without rule resolution when a step returns error', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'failed',
+          error: 'request failed',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Step "plan" failed: request failed');
+    });
+
+    it('should complete when a matched rule returns a logical result', async () => {
+      const config = buildDefaultWorkflowConfig({
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [
+              { condition: 'retry', returnValue: 'retry_plan' },
+            ],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          content: '[STEP:1] retry',
+        }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextStep).toBe('COMPLETE');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('completed');
+      expect(result.response.matchedRuleIndex).toBe(0);
+    });
+  });
+
+  // =====================================================
+  // 4. Loop detection
+  // =====================================================
+  describe('Loop detection', () => {
+    it('should abort when loop detected with action: abort', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 100,
+        loopDetection: { maxConsecutiveSameStep: 3, action: 'abort' },
+        initialStep: 'loop-step',
+        steps: [
+          makeStep('loop-step', {
+            rules: [makeRule('continue', 'loop-step')],
+          }),
+        ],
+      });
+
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      for (let i = 0; i < 5; i++) {
+        vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
+          options?.onPromptResolved?.({
+            systemPrompt: typeof persona === 'string' ? persona : '',
+            userInstruction: task,
+          });
+          return makeResponse({ content: `iteration ${i}` });
+        });
+        vi.mocked(detectMatchedRule).mockResolvedValueOnce(
+          { index: 0, method: 'phase1_tag' }
+        );
+      }
+
+      const abortFn = vi.fn();
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Loop detected');
+      expect(reason).toContain('loop-step');
+    });
+  });
+
+  // =====================================================
+  // 5. Iteration limit
+  // =====================================================
+  describe('Iteration limit', () => {
+    it('should abort when max iterations reached without onIterationLimit callback', async () => {
+      const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', content: 'Plan done' }),
+        makeResponse({ persona: 'implement', content: 'Impl done' }),
+        makeResponse({ persona: 'ai_review', content: 'OK' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },  // plan → implement
+        { index: 0, method: 'phase1_tag' },  // implement → ai_review
+        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers (won't be reached)
+      ]);
+
+      const limitFn = vi.fn();
+      const abortFn = vi.fn();
+      engine.on('iteration:limit', limitFn);
+      engine.on('workflow:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(limitFn).toHaveBeenCalledWith(2, 2);
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Max steps');
+    });
+
+    it('should extend iterations when onIterationLimit provides additional iterations', async () => {
+      const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
+
+      const onIterationLimit = vi.fn().mockResolvedValueOnce(10);
+
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        onIterationLimit,
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'plan', content: 'Plan done' }),
+        makeResponse({ persona: 'implement', content: 'Impl done' }),
+        // After hitting limit at iteration 2, onIterationLimit extends to 12
+        makeResponse({ persona: 'ai_review', content: 'OK' }),
+        makeResponse({ persona: 'arch-review', content: 'OK' }),
+        makeResponse({ persona: 'security-review', content: 'OK' }),
+        makeResponse({ persona: 'supervise', content: 'All passed' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },  // plan → implement
+        { index: 0, method: 'phase1_tag' },  // implement → ai_review
+        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase1_tag' },  // arch-review → approved
+        { index: 0, method: 'phase1_tag' },  // security-review → approved
+        { index: 0, method: 'aggregate' },   // reviewers → supervise
+        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(onIterationLimit).toHaveBeenCalledOnce();
+    });
+  });
+});

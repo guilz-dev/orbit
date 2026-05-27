@@ -1,0 +1,227 @@
+import type { GlobalConfig } from '../../../core/models/config-types.js';
+import {
+  denormalizeProviderProfiles,
+  denormalizePersonaProviders,
+  denormalizeWorkflowOverrides,
+  denormalizeProviderOptions,
+  denormalizeRateLimitFallback,
+} from '../configNormalizers.js';
+import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
+
+export function serializeGlobalConfig(config: GlobalConfig): Record<string, unknown> {
+  const raw: Record<string, unknown> = {
+    language: config.language,
+    provider: config.provider,
+  };
+  if (config.model) {
+    raw.model = config.model;
+  }
+  if (config.logging && (
+    config.logging.level !== undefined
+    || config.logging.trace !== undefined
+    || config.logging.debug !== undefined
+    || config.logging.providerEvents !== undefined
+    || config.logging.usageEvents !== undefined
+  )) {
+    raw.logging = {
+      ...(config.logging.level !== undefined ? { level: config.logging.level } : {}),
+      ...(config.logging.trace !== undefined ? { trace: config.logging.trace } : {}),
+      ...(config.logging.debug !== undefined ? { debug: config.logging.debug } : {}),
+      ...(config.logging.providerEvents !== undefined ? { provider_events: config.logging.providerEvents } : {}),
+      ...(config.logging.usageEvents !== undefined ? { usage_events: config.logging.usageEvents } : {}),
+    };
+  }
+  if (config.analytics) {
+    const analyticsRaw: Record<string, unknown> = {};
+    if (config.analytics.enabled !== undefined) analyticsRaw.enabled = config.analytics.enabled;
+    if (config.analytics.eventsPath) analyticsRaw.events_path = config.analytics.eventsPath;
+    if (config.analytics.retentionDays !== undefined) analyticsRaw.retention_days = config.analytics.retentionDays;
+    if (Object.keys(analyticsRaw).length > 0) {
+      raw.analytics = analyticsRaw;
+    }
+  }
+  const rawObservability = denormalizeObservabilityConfig(config.observability);
+  if (rawObservability) {
+    raw.observability = rawObservability;
+  }
+  if (config.worktreeDir) {
+    raw.worktree_dir = config.worktreeDir;
+  }
+  if (config.allowGitHooks !== undefined) {
+    raw.allow_git_hooks = config.allowGitHooks;
+  }
+  if (config.allowGitFilters !== undefined) {
+    raw.allow_git_filters = config.allowGitFilters;
+  }
+  if (config.vcsProvider !== undefined) {
+    raw.vcs_provider = config.vcsProvider;
+  }
+  if (config.autoPr !== undefined) {
+    raw.auto_pr = config.autoPr;
+  }
+  if (config.draftPr !== undefined) {
+    raw.draft_pr = config.draftPr;
+  }
+  if (config.disabledBuiltins && config.disabledBuiltins.length > 0) {
+    raw.disabled_builtins = config.disabledBuiltins;
+  }
+  if (config.enableBuiltinWorkflows !== undefined) {
+    raw.enable_builtin_workflows = config.enableBuiltinWorkflows;
+  }
+  if (config.anthropicApiKey) {
+    raw.anthropic_api_key = config.anthropicApiKey;
+  }
+  if (config.openaiApiKey) {
+    raw.openai_api_key = config.openaiApiKey;
+  }
+  if (config.geminiApiKey) {
+    raw.gemini_api_key = config.geminiApiKey;
+  }
+  if (config.googleApiKey) {
+    raw.google_api_key = config.googleApiKey;
+  }
+  if (config.groqApiKey) {
+    raw.groq_api_key = config.groqApiKey;
+  }
+  if (config.openrouterApiKey) {
+    raw.openrouter_api_key = config.openrouterApiKey;
+  }
+  if (config.codexCliPath) {
+    raw.codex_cli_path = config.codexCliPath;
+  }
+  if (config.claudeCliPath) {
+    raw.claude_cli_path = config.claudeCliPath;
+  }
+  if (config.cursorCliPath) {
+    raw.cursor_cli_path = config.cursorCliPath;
+  }
+  if (config.copilotCliPath) {
+    raw.copilot_cli_path = config.copilotCliPath;
+  }
+  if (config.copilotGithubToken) {
+    raw.copilot_github_token = config.copilotGithubToken;
+  }
+  if (config.opencodeApiKey) {
+    raw.opencode_api_key = config.opencodeApiKey;
+  }
+  if (config.cursorApiKey) {
+    raw.cursor_api_key = config.cursorApiKey;
+  }
+  if (config.bookmarksFile) {
+    raw.bookmarks_file = config.bookmarksFile;
+  }
+  if (config.workflowCategoriesFile) {
+    raw.workflow_categories_file = config.workflowCategoriesFile;
+  }
+  const rawProviderOptions = denormalizeProviderOptions(config.providerOptions);
+  if (rawProviderOptions) {
+    raw.provider_options = rawProviderOptions;
+  }
+  const rawRateLimitFallback = denormalizeRateLimitFallback(config.rateLimitFallback);
+  if (rawRateLimitFallback) {
+    raw.rate_limit_fallback = rawRateLimitFallback;
+  }
+  const rawProviderProfiles = denormalizeProviderProfiles(config.providerProfiles);
+  if (rawProviderProfiles && Object.keys(rawProviderProfiles).length > 0) {
+    raw.provider_profiles = rawProviderProfiles;
+  }
+  if (config.runtime?.prepare && config.runtime.prepare.length > 0) {
+    raw.runtime = {
+      prepare: [...new Set(config.runtime.prepare)],
+    };
+  }
+  if (config.workflowRuntimePrepare) {
+    raw.workflow_runtime_prepare = {
+      custom_scripts: config.workflowRuntimePrepare.customScripts,
+    };
+  }
+  if (config.workflowArpeggio) {
+    raw.workflow_arpeggio = {
+      custom_data_source_modules: config.workflowArpeggio.customDataSourceModules,
+      custom_merge_inline_js: config.workflowArpeggio.customMergeInlineJs,
+      custom_merge_files: config.workflowArpeggio.customMergeFiles,
+    };
+  }
+  if (config.syncConflictResolver) {
+    raw.sync_conflict_resolver = {
+      auto_approve_tools: config.syncConflictResolver.autoApproveTools,
+    };
+  }
+  if (config.workflowMcpServers && Object.keys(config.workflowMcpServers).length > 0) {
+    raw.workflow_mcp_servers = config.workflowMcpServers;
+  }
+  if (config.preventSleep !== undefined) {
+    raw.prevent_sleep = config.preventSleep;
+  }
+  if (config.notificationSound !== undefined) {
+    raw.notification_sound = config.notificationSound;
+  }
+  if (config.notificationSoundEvents) {
+    const eventRaw: Record<string, unknown> = {};
+    if (config.notificationSoundEvents.iterationLimit !== undefined) {
+      eventRaw.iteration_limit = config.notificationSoundEvents.iterationLimit;
+    }
+    if (config.notificationSoundEvents.workflowComplete !== undefined) {
+      eventRaw.workflow_complete = config.notificationSoundEvents.workflowComplete;
+    }
+    if (config.notificationSoundEvents.workflowAbort !== undefined) {
+      eventRaw.workflow_abort = config.notificationSoundEvents.workflowAbort;
+    }
+    if (config.notificationSoundEvents.runComplete !== undefined) {
+      eventRaw.run_complete = config.notificationSoundEvents.runComplete;
+    }
+    if (config.notificationSoundEvents.runAbort !== undefined) {
+      eventRaw.run_abort = config.notificationSoundEvents.runAbort;
+    }
+    if (Object.keys(eventRaw).length > 0) {
+      raw.notification_sound_events = eventRaw;
+    }
+  }
+  if (config.autoFetch) {
+    raw.auto_fetch = config.autoFetch;
+  }
+  if (config.baseBranch) {
+    raw.base_branch = config.baseBranch;
+  }
+  const denormalizedWorkflowOverrides = denormalizeWorkflowOverrides(config.workflowOverrides);
+  if (denormalizedWorkflowOverrides) {
+    raw.workflow_overrides = denormalizedWorkflowOverrides;
+  }
+  // Project-local keys (also accepted in global config)
+  if (config.pipeline) {
+    const pipelineRaw: Record<string, unknown> = {};
+    if (config.pipeline.defaultBranchPrefix !== undefined) {
+      pipelineRaw.default_branch_prefix = config.pipeline.defaultBranchPrefix;
+    }
+    if (config.pipeline.commitMessageTemplate !== undefined) {
+      pipelineRaw.commit_message_template = config.pipeline.commitMessageTemplate;
+    }
+    if (config.pipeline.prBodyTemplate !== undefined) {
+      pipelineRaw.pr_body_template = config.pipeline.prBodyTemplate;
+    }
+    if (Object.keys(pipelineRaw).length > 0) raw.pipeline = pipelineRaw;
+  }
+  const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
+  if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {
+    raw.persona_providers = rawPersonaProviders;
+  }
+  if (config.branchNameStrategy !== undefined) {
+    raw.branch_name_strategy = config.branchNameStrategy;
+  }
+  if (config.minimalOutput !== undefined) {
+    raw.minimal_output = config.minimalOutput;
+  }
+  if (config.concurrency !== undefined) {
+    raw.concurrency = config.concurrency;
+  }
+  if (config.taskPollIntervalMs !== undefined) {
+    raw.task_poll_interval_ms = config.taskPollIntervalMs;
+  }
+  if (config.interactivePreviewSteps !== undefined) {
+    raw.interactive_preview_steps = config.interactivePreviewSteps;
+  }
+  if (config.syncProjectLocalTaktOnRetry !== undefined) {
+    raw.sync_project_local_takt_on_retry = config.syncProjectLocalTaktOnRetry;
+  }
+  return raw;
+}

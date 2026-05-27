@@ -1,0 +1,287 @@
+/**
+ * add command implementation
+ *
+ * Appends a task record to .takt/tasks.yaml.
+ */
+
+import * as path from 'node:path';
+import { promptInput, confirm, selectOption } from '../../../shared/prompt/index.js';
+import { info, error, withProgress } from '../../../shared/ui/index.js';
+import { getLabel } from '../../../shared/i18n/index.js';
+import type { Language } from '../../../core/models/types.js';
+import {
+  TaskRunner,
+  TaskExecutionConfigSchema,
+  type TaskFileData,
+  summarizeTaskName,
+  resolveTaskWorkflowValue,
+} from '../../../infra/task/index.js';
+import { determineWorkflow } from '../execute/selectAndExecute.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { isIssueReference, resolveIssueTask, parseIssueNumbers, formatPrReviewAsTask, getGitProvider } from '../../../infra/git/index.js';
+import type { PrReviewData } from '../../../infra/git/index.js';
+import { firstLine } from '../../../infra/task/naming.js';
+import { extractTitle, createIssueFromTask } from './issueTask.js';
+import { displayTaskCreationResult, promptWorktreeSettings, type WorktreeSettings } from './worktree-settings.js';
+import {
+  cleanupPreparedTaskSpec,
+  prepareTaskSpecDirectory,
+  type TaskAttachment,
+} from '../attachments.js';
+export { extractTitle, createIssueFromTask };
+
+const log = createLogger('add-task');
+
+type SaveTaskOptions = {
+  workflow?: string;
+  issue?: number;
+  worktree?: boolean | string;
+  branch?: string;
+  baseBranch?: string;
+  autoPr?: boolean;
+  draftPr?: boolean;
+  managedPr?: boolean;
+  shouldPublishBranchToOrigin?: boolean;
+  prNumber?: number;
+  attachments?: TaskAttachment[];
+};
+
+function buildValidatedTaskConfig(options?: SaveTaskOptions): Omit<TaskFileData, 'task'> {
+  const resolvedWorkflow = options ? resolveTaskWorkflowValue(options) : undefined;
+  return TaskExecutionConfigSchema.parse({
+    ...(options?.worktree !== undefined && { worktree: options.worktree }),
+    ...(options?.branch && { branch: options.branch }),
+    ...(options?.baseBranch && { base_branch: options.baseBranch }),
+    ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
+    ...(options?.issue !== undefined && { issue: options.issue }),
+    ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
+    ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
+    ...(options?.managedPr !== undefined && { managed_pr: options.managedPr }),
+    ...(options?.shouldPublishBranchToOrigin !== undefined && {
+      should_publish_branch_to_origin: options.shouldPublishBranchToOrigin,
+    }),
+    ...(options?.prNumber !== undefined && {
+      source: 'pr_review' as const,
+      pr_number: options.prNumber,
+    }),
+  });
+}
+
+/**
+ * Save a task entry to .takt/tasks.yaml.
+ *
+ * Common logic extracted from addTask(). Used by both addTask()
+ * and saveTaskFromInteractive().
+ */
+export async function saveTaskFile(
+  cwd: string,
+  taskContent: string,
+  options?: SaveTaskOptions,
+): Promise<{ taskName: string; tasksFile: string }> {
+  const runner = new TaskRunner(cwd);
+  const config = buildValidatedTaskConfig(options);
+  const slug = await summarizeTaskName(taskContent, { cwd });
+  const summary = firstLine(taskContent);
+  const preparedSpec = prepareTaskSpecDirectory(cwd, taskContent, options?.attachments);
+  let created;
+  try {
+    created = runner.addTask(taskContent, {
+      ...config,
+      task_dir: preparedSpec.taskDirRelative,
+      slug,
+      summary,
+    });
+  } catch (error) {
+    cleanupPreparedTaskSpec(preparedSpec.taskDir);
+    throw error;
+  }
+  const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');
+  log.info('Task created', { taskName: created.name, tasksFile, config });
+  return { taskName: created.name, tasksFile };
+}
+
+
+/**
+ * Prompt user to select a label for the issue.
+ *
+ * Presents 4 fixed options: None, bug, enhancement, custom input.
+ * Returns an array of selected labels (empty if none selected).
+ */
+export async function promptLabelSelection(lang: Language): Promise<string[]> {
+  const selected = await selectOption<string>(
+    getLabel('issue.labelSelection.prompt', lang),
+    [
+      { label: getLabel('issue.labelSelection.none', lang), value: 'none' },
+      { label: 'bug', value: 'bug' },
+      { label: 'enhancement', value: 'enhancement' },
+      { label: getLabel('issue.labelSelection.custom', lang), value: 'custom' },
+    ],
+  );
+
+  if (selected === null || selected === 'none') return [];
+  if (selected === 'custom') {
+    const customLabel = await promptInput(getLabel('issue.labelSelection.customPrompt', lang));
+    return customLabel?.split(',').map((l) => l.trim()).filter((l) => l.length > 0) ?? [];
+  }
+  return [selected];
+}
+
+
+/**
+ * Save a task from interactive mode result.
+ * Prompts for worktree/branch/auto_pr settings before saving.
+ * If presetSettings is provided, skips the prompt and uses those settings directly.
+ */
+export async function saveTaskFromInteractive(
+  cwd: string,
+  task: string,
+  workflow?: string,
+  options?: {
+    issue?: number;
+    confirmAtEndMessage?: string;
+    presetSettings?: WorktreeSettings;
+    attachments?: TaskAttachment[];
+  },
+): Promise<void> {
+  if (options?.confirmAtEndMessage) {
+    const approved = await confirm(options.confirmAtEndMessage, true);
+    if (!approved) {
+      return;
+    }
+  }
+  const settings = options?.presetSettings ?? await promptWorktreeSettings(cwd);
+  const created = await saveTaskFile(cwd, task, {
+    workflow,
+    issue: options?.issue,
+    ...settings,
+    ...(options?.attachments ? { attachments: options.attachments } : {}),
+  });
+  displayTaskCreationResult(created, settings, workflow);
+}
+
+export async function createIssueAndSaveTask(
+  cwd: string,
+  task: string,
+  workflow?: string,
+  options?: { confirmAtEndMessage?: string; labels?: string[]; attachments?: TaskAttachment[] },
+): Promise<void> {
+  const issueNumber = createIssueFromTask(task, { labels: options?.labels, cwd });
+  if (issueNumber === undefined) {
+    return;
+  }
+  await saveTaskFromInteractive(cwd, task, workflow, {
+    issue: issueNumber,
+    confirmAtEndMessage: options?.confirmAtEndMessage,
+    ...(options?.attachments ? { attachments: options.attachments } : {}),
+  });
+}
+
+/**
+ * add command handler
+ *
+ * Flow:
+ *   A) --pr オプション: PRレビュー取得 → ワークフロー選択 → YAML作成
+ *   B) 引数なし: Usage表示して終了
+ *   C) Issue参照の場合: issue取得 → ワークフロー選択 → ワークツリー設定 → YAML作成
+ *   D) 通常入力: ワークフロー選択 → ワークツリー設定 → YAML作成
+ */
+export async function addTask(
+  cwd: string,
+  task?: string,
+  opts?: { prNumber?: number; workflow?: string },
+): Promise<void> {
+  const rawTask = task ?? '';
+  const trimmedTask = rawTask.trim();
+  const prNumber = opts?.prNumber;
+
+  if (prNumber !== undefined) {
+    const provider = getGitProvider();
+    const cliStatus = provider.checkCliStatus(cwd);
+    if (!cliStatus.available) {
+      error(cliStatus.error);
+      return;
+    }
+
+    let prReview: PrReviewData;
+    try {
+      prReview = await withProgress(
+        'Fetching PR review comments...',
+        (fetchedPrReview: PrReviewData) => `PR fetched: #${fetchedPrReview.number} ${fetchedPrReview.title}`,
+        async () => provider.fetchPrReviewComments(prNumber, cwd),
+      );
+    } catch (e) {
+      const msg = getErrorMessage(e);
+      error(`Failed to fetch PR review comments #${prNumber}: ${msg}`);
+      return;
+    }
+
+    if (prReview.reviews.length === 0 && prReview.comments.length === 0) {
+      error(`PR #${prNumber} has no review comments`);
+      return;
+    }
+
+    const taskContent = formatPrReviewAsTask(prReview);
+    const workflow = await determineWorkflow(cwd, opts?.workflow);
+    if (workflow === null) {
+      info('Cancelled.');
+      return;
+    }
+
+    const settings = {
+      worktree: true,
+      branch: prReview.headRefName,
+      baseBranch: prReview.baseRefName,
+      autoPr: false,
+      shouldPublishBranchToOrigin: true,
+    };
+    const created = await saveTaskFile(cwd, taskContent, { workflow, ...settings, prNumber });
+    displayTaskCreationResult(created, settings, workflow);
+    return;
+  }
+
+  if (!trimmedTask) {
+    info('Usage: takt add <task>');
+    return;
+  }
+
+  let taskContent: string;
+  let issueNumber: number | undefined;
+
+  if (isIssueReference(trimmedTask)) {
+    try {
+      const numbers = parseIssueNumbers([trimmedTask]);
+      const primaryIssueNumber = numbers[0];
+      taskContent = await withProgress(
+        'Fetching issue...',
+        primaryIssueNumber ? `Issue fetched: #${primaryIssueNumber}` : 'Issue fetched',
+        async () => resolveIssueTask(trimmedTask, cwd),
+      );
+      if (numbers.length > 0) {
+        issueNumber = numbers[0];
+      }
+    } catch (e) {
+      const msg = getErrorMessage(e);
+      log.error('Failed to fetch issue', { task: trimmedTask, error: msg });
+      info(`Failed to fetch issue ${trimmedTask}: ${msg}`);
+      return;
+    }
+  } else {
+    taskContent = rawTask;
+  }
+
+  const workflow = await determineWorkflow(cwd, opts?.workflow);
+  if (workflow === null) {
+    info('Cancelled.');
+    return;
+  }
+
+  const settings = await promptWorktreeSettings(cwd);
+
+  const created = await saveTaskFile(cwd, taskContent, {
+    workflow,
+    issue: issueNumber,
+    ...settings,
+  });
+
+  displayTaskCreationResult(created, settings, workflow);
+}

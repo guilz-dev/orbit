@@ -1,0 +1,385 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+const {
+  mockResolveAssistantConfigLayers,
+  mockResolveAssistantProviderModelFromConfig,
+} = vi.hoisted(() => ({
+  mockResolveAssistantConfigLayers: vi.fn(),
+  mockResolveAssistantProviderModelFromConfig: vi.fn(),
+}));
+
+vi.mock('node:fs', () => ({
+  existsSync: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({
+  execFileSync: vi.fn(),
+}));
+
+vi.mock('../shared/ui/index.js', () => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  StreamDisplay: vi.fn(() => ({
+    createHandler: vi.fn(() => vi.fn()),
+  })),
+}));
+
+vi.mock('../shared/utils/index.js', () => ({
+  createLogger: vi.fn(() => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  })),
+  getErrorMessage: vi.fn((err) => String(err)),
+}));
+
+const mockAgentCall = vi.fn();
+
+vi.mock('../infra/providers/index.js', () => ({
+  getProvider: vi.fn(() => ({
+    setup: vi.fn(() => ({ call: mockAgentCall })),
+  })),
+}));
+
+vi.mock('../infra/config/index.js', () => ({
+  getLanguage: vi.fn(() => 'en'),
+  resolveConfigValues: vi.fn(() => ({ syncConflictResolver: undefined })),
+}));
+
+vi.mock('../features/interactive/assistantConfig.js', () => ({
+  resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+}));
+
+vi.mock('../core/config/provider-resolution.js', () => ({
+  resolveAssistantProviderModelFromConfig: (...args: unknown[]) =>
+    mockResolveAssistantProviderModelFromConfig(...args),
+}));
+
+const mockRelayPushCloneToOrigin = vi.fn();
+vi.mock('../infra/task/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  relayPushCloneToOrigin: (...args: unknown[]) => mockRelayPushCloneToOrigin(...args),
+}));
+
+vi.mock('../shared/prompts/index.js', () => ({
+  loadTemplate: vi.fn((_name: string, _lang: string, vars?: Record<string, string>) => {
+    if (_name === 'sync_conflict_resolver_system_prompt') return 'system-prompt';
+    if (_name === 'sync_conflict_resolver_message') return `message:${vars?.originalInstruction ?? ''}`;
+    return '';
+  }),
+}));
+
+import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { error as logError, success } from '../shared/ui/index.js';
+import { getProvider } from '../infra/providers/index.js';
+import { resolveConfigValues } from '../infra/config/index.js';
+import { syncBranchWithRoot } from '../features/tasks/list/taskSyncAction.js';
+import type { TaskListItem } from '../infra/task/index.js';
+import type { AgentResponse } from '../core/models/index.js';
+
+const mockExistsSync = vi.mocked(fs.existsSync);
+const mockExecFileSync = vi.mocked(execFileSync);
+const mockLogError = vi.mocked(logError);
+const mockSuccess = vi.mocked(success);
+const mockGetProvider = vi.mocked(getProvider);
+const mockResolveConfigValues = vi.mocked(resolveConfigValues);
+
+function makeTask(overrides: Partial<TaskListItem> = {}): TaskListItem {
+  return {
+    kind: 'completed',
+    name: 'test-task',
+    branch: 'task/test-task',
+    createdAt: '2026-01-01T00:00:00Z',
+    filePath: '/project/.takt/tasks.yaml',
+    content: 'Implement feature X',
+    worktreePath: '/project-worktrees/test-task',
+    ...overrides,
+  };
+}
+
+function makeAgentResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
+  return {
+    persona: 'conflict-resolver',
+    status: 'done',
+    content: 'Conflicts resolved',
+    timestamp: new Date(),
+    ...overrides,
+  };
+}
+
+const PROJECT_DIR = '/project';
+
+describe('syncBranchWithRoot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(true);
+    mockAgentCall.mockResolvedValue(makeAgentResponse());
+    mockResolveConfigValues.mockReturnValue({ syncConflictResolver: undefined } as never);
+    mockResolveAssistantConfigLayers.mockReturnValue({ local: {}, global: {} });
+    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'claude', model: 'sonnet' });
+    mockRelayPushCloneToOrigin.mockReturnValue(undefined);
+  });
+
+  it('throws when called with a non-task BranchActionTarget', async () => {
+    const branchTarget = {
+      info: { branch: 'some-branch', commit: 'abc123' },
+      originalInstruction: 'Do something',
+    };
+
+    await expect(
+      syncBranchWithRoot(PROJECT_DIR, branchTarget as never),
+    ).rejects.toThrow('Sync requires a task target.');
+  });
+
+  it('returns false and logs error when worktreePath is missing', async () => {
+    const task = makeTask({ worktreePath: undefined });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Worktree directory does not exist'),
+    );
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('returns false and logs error when worktreePath does not exist on disk', async () => {
+    const task = makeTask();
+    mockExistsSync.mockReturnValue(false);
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Worktree directory does not exist'),
+    );
+  });
+
+  it('returns false and logs error when git fetch fails', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockImplementationOnce(() => { throw new Error('fetch error'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch from root'));
+    expect(mockAgentCall).not.toHaveBeenCalled();
+  });
+
+  it('surfaces git stderr when fetch from root fails', async () => {
+    const task = makeTask();
+    const err = new Error('Command failed: git fetch');
+    Object.assign(err, {
+      stderr: Buffer.from('fatal: cannot fetch from root\n'),
+    });
+    mockExecFileSync.mockImplementationOnce(() => { throw err; });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith('Failed to fetch from root: fatal: cannot fetch from root');
+  });
+
+  it('returns true and pushes when merge succeeds without conflicts', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockReturnValue('' as never);
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockSuccess).toHaveBeenCalledWith('Synced & pushed.');
+    expect(mockAgentCall).not.toHaveBeenCalled();
+    // relay push: worktree → origin via root repo
+    expect(mockRelayPushCloneToOrigin).toHaveBeenCalledWith(
+      task.worktreePath,
+      PROJECT_DIR,
+      'task/test-task',
+    );
+  });
+
+  it('calls provider agent when merge has conflicts', async () => {
+    const task = makeTask();
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockSuccess).toHaveBeenCalledWith('Conflicts resolved & pushed.');
+    expect(mockResolveAssistantConfigLayers).toHaveBeenCalledWith(PROJECT_DIR);
+    expect(mockGetProvider).toHaveBeenCalledWith('claude');
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.stringContaining('Implement feature X'),
+      expect.objectContaining({
+        cwd: task.worktreePath,
+        model: 'sonnet',
+        permissionMode: 'edit',
+        onStream: expect.any(Function),
+      }),
+    );
+  });
+
+  it('uses assistant provider/model resolution for conflict resolver', async () => {
+    const task = makeTask();
+    mockResolveAssistantProviderModelFromConfig.mockReturnValue({ provider: 'codex', model: 'gpt-5.4' });
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockGetProvider).toHaveBeenCalledWith('codex');
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: 'gpt-5.4',
+      }),
+    );
+  });
+
+  it('does not pass auto-approve handler when sync_conflict_resolver is not configured', async () => {
+    const task = makeTask();
+    mockResolveConfigValues.mockReturnValue({
+      syncConflictResolver: undefined,
+    } as never);
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        onPermissionRequest: undefined,
+      }),
+    );
+  });
+
+  it('does not pass auto-approve handler when autoApproveTools is false', async () => {
+    const task = makeTask();
+    mockResolveConfigValues.mockReturnValue({
+      syncConflictResolver: { autoApproveTools: false },
+    } as never);
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        onPermissionRequest: undefined,
+      }),
+    );
+  });
+
+  it('passes auto-approve handler when sync_conflict_resolver config enables it', async () => {
+    const task = makeTask();
+    mockResolveConfigValues.mockReturnValue({
+      syncConflictResolver: { autoApproveTools: true },
+    } as never);
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        onPermissionRequest: expect.any(Function),
+      }),
+    );
+  });
+
+  it('aborts merge and returns false when AI resolution fails', async () => {
+    const task = makeTask();
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); })
+      .mockReturnValueOnce('' as never);
+    mockAgentCall.mockResolvedValue(makeAgentResponse({ status: 'error' }));
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to resolve conflicts'),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git', ['merge', '--abort'],
+      expect.objectContaining({ cwd: task.worktreePath }),
+    );
+  });
+
+  it('does not throw when git merge --abort itself fails', async () => {
+    const task = makeTask();
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); })
+      .mockImplementationOnce(() => { throw new Error('abort failed'); });
+    mockAgentCall.mockResolvedValue(makeAgentResponse({ status: 'error' }));
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+  });
+
+  it('returns false when push fails after successful merge', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockReturnValue('' as never);
+    mockRelayPushCloneToOrigin.mockImplementation(() => {
+      throw new Error('push failed');
+    });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Push failed after sync'),
+    );
+    expect(mockSuccess).not.toHaveBeenCalledWith('Synced & pushed.');
+  });
+
+  it('returns false when push fails after AI conflict resolution', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr[0] === 'merge' && !argsArr.includes('--abort')) throw new Error('CONFLICT');
+      return '' as never;
+    });
+    mockRelayPushCloneToOrigin.mockImplementation(() => {
+      throw new Error('push failed');
+    });
+    mockAgentCall.mockResolvedValue(makeAgentResponse({ status: 'done' }));
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(false);
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('Push failed after sync'),
+    );
+    expect(mockSuccess).not.toHaveBeenCalledWith('Conflicts resolved & pushed.');
+  });
+
+  it('fetches from projectDir using local path ref', async () => {
+    const task = makeTask();
+    mockExecFileSync.mockReturnValue('' as never);
+
+    await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['fetch', PROJECT_DIR, 'HEAD:refs/remotes/root/sync-target'],
+      expect.objectContaining({ cwd: task.worktreePath }),
+    );
+  });
+});

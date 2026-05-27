@@ -1,0 +1,92 @@
+{
+  "name": "takt",
+  "version": "0.42.0",
+  "description": "TAKT: TAKT Agent Koordination Topology - AI Agent Workflow Orchestration",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "takt": "./bin/takt",
+    "takt-dev": "./bin/takt",
+    "takt-cli": "./dist/app/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc && mkdir -p dist/shared/prompts/en dist/shared/prompts/ja dist/shared/i18n dist/core/runtime/presets && cp src/shared/prompts/en/*.md dist/shared/prompts/en/ && cp src/shared/prompts/ja/*.md dist/shared/prompts/ja/ && cp src/shared/i18n/labels_en.yaml src/shared/i18n/labels_ja.yaml dist/shared/i18n/ && cp src/core/runtime/presets/*.sh dist/core/runtime/presets/",
+    "watch": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "tmp=\"$(mktemp -t takt-e2e.XXXXXX)\"; npm run test:e2e:mock >\"$tmp\" 2>&1; code=$?; cat \"$tmp\"; if grep -q \"error connecting to api.github.com\" \"$tmp\"; then echo \"[takt] GitHub connectivity error detected in E2E output\"; code=1; fi; rm -f \"$tmp\"; if [ \"$code\" -eq 0 ]; then msg='test:e2e passed'; else msg=\"test:e2e failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"E2E\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "test:e2e:mock": "TAKT_E2E_PROVIDER=mock vitest run --config vitest.config.e2e.mock.ts --outputFile.json=e2e/results/mock.json",
+    "test:e2e:all": "npm run test:e2e:mock && npm run test:e2e:provider",
+    "test:e2e:provider": "npm run test:e2e:provider:claude && npm run test:e2e:provider:claude-sdk && npm run test:e2e:provider:codex && npm run test:e2e:provider:opencode",
+    "test:e2e:provider:claude": "TAKT_E2E_PROVIDER=claude vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude.json",
+    "test:e2e:provider:claude-sdk": "TAKT_E2E_PROVIDER=claude-sdk vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/claude-sdk.json",
+    "test:e2e:provider:codex": "TAKT_E2E_PROVIDER=codex vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/codex.json",
+    "test:e2e:provider:opencode": "TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=${TAKT_E2E_MODEL:-opencode/big-pickle} vitest run --config vitest.config.e2e.provider.ts --outputFile.json=e2e/results/opencode.json",
+    "test:e2e:provider:cursor": "TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor vitest run --config vitest.config.e2e.cursor.ts --outputFile.json=e2e/results/cursor.json",
+    "test:e2e:claude": "npm run test:e2e:provider:claude",
+    "test:e2e:codex": "npm run test:e2e:provider:codex",
+    "test:e2e:opencode": "npm run test:e2e:provider:opencode",
+    "test:e2e:cursor": "npm run test:e2e:provider:cursor",
+    "lint": "eslint src/",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "prepublishOnly": "npm run lint && npm run build && npm run test"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "ai",
+    "agent",
+    "orchestration",
+    "workflow",
+    "automation",
+    "llm",
+    "anthropic"
+  ],
+  "author": "nrslib <38722970+nrslib@users.noreply.github.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nrslib/takt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nrslib/takt/issues"
+  },
+  "homepage": "https://github.com/nrslib/takt#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=18.19.0"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "builtins/"
+  ],
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.119",
+    "@openai/codex-sdk": "^0.125.0",
+    "@opencode-ai/sdk": "^1.14.24",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/sdk-node": "^0.217.0",
+    "ajv": "^6.12.6",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "faceted-prompting": "^0.1.0",
+    "traced-config": "^0.3.0",
+    "update-notifier": "^7.3.1",
+    "wanakana": "^5.3.1",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^20.14.0",
+    "@types/wanakana": "^4.0.6",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.53.1",
+    "vitest": "^2.0.0"
+  }
+}

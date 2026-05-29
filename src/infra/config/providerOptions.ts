@@ -41,6 +41,9 @@ type RawProviderOptions = {
   copilot?: {
     effort?: CopilotEffort;
   };
+  ollama?: {
+    base_url?: string;
+  };
 };
 
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
@@ -105,6 +108,12 @@ export function normalizeProviderOptions(
   if (options.copilot?.effort !== undefined) {
     result.copilot = { effort: options.copilot.effort };
   }
+  if (options.ollama?.base_url !== undefined) {
+    const baseUrl = options.ollama.base_url.trim();
+    if (baseUrl.length > 0) {
+      result.ollama = { baseUrl };
+    }
+  }
   if (
     options.claude_terminal?.backend !== undefined
     || options.claude_terminal?.timeout_ms !== undefined
@@ -167,6 +176,9 @@ export function mergeProviderOptions(
     }
     if (layer.claudeTerminal) {
       result.claudeTerminal = { ...result.claudeTerminal, ...layer.claudeTerminal };
+    }
+    if (layer.ollama) {
+      result.ollama = { ...result.ollama, ...layer.ollama };
     }
   }
 
@@ -330,6 +342,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.claudeTerminal?.transcriptPollIntervalMs,
     resolveProviderOptionOrigin(originResolver, 'claudeTerminal.transcriptPollIntervalMs', source),
   );
+  const ollamaBaseUrl = selectProviderValue(
+    resolvedConfigOptions.ollama?.baseUrl,
+    personaOptions?.ollama?.baseUrl,
+    stepOptions?.ollama?.baseUrl,
+    resolveProviderOptionOrigin(originResolver, 'ollama.baseUrl', source),
+  );
 
   const result: StepProviderOptions = {
     codex:
@@ -365,9 +383,10 @@ export function resolveEffectiveProviderOptions(
               : {}),
           }
         : undefined,
+    ollama: ollamaBaseUrl !== undefined ? { baseUrl: ollamaBaseUrl } : undefined,
   };
 
-  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal
+  return result.codex || result.opencode || result.claude || result.copilot || result.claudeTerminal || result.ollama
     ? result
     : undefined;
 }
@@ -405,6 +424,9 @@ function stripClaudeAllowedTools(
       : {}),
     ...(providerOptions.claudeTerminal !== undefined
       ? { claudeTerminal: { ...providerOptions.claudeTerminal } }
+      : {}),
+    ...(providerOptions.ollama !== undefined
+      ? { ollama: { ...providerOptions.ollama } }
       : {}),
   };
 
@@ -456,6 +478,7 @@ export const PROVIDER_OPTION_PATHS = [
   'claudeTerminal.timeoutMs',
   'claudeTerminal.keepSession',
   'claudeTerminal.transcriptPollIntervalMs',
+  'ollama.baseUrl',
 ] as const;
 
 export type ProviderOptionPath = (typeof PROVIDER_OPTION_PATHS)[number];

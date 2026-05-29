@@ -73,12 +73,17 @@ export interface CopilotProviderOptions {
   effort?: CopilotEffort;
 }
 
+export interface OllamaProviderOptions {
+  baseUrl?: string;
+}
+
 export interface StepProviderOptions {
   codex?: CodexProviderOptions;
   opencode?: OpenCodeProviderOptions;
   claude?: ClaudeProviderOptions;
   claudeTerminal?: ClaudeTerminalProviderOptions;
   copilot?: CopilotProviderOptions;
+  ollama?: OllamaProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

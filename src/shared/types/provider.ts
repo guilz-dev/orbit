@@ -9,6 +9,7 @@ export const PROVIDER_TYPES = [
   'cursor',
   'copilot',
   'kiro',
+  'ollama',
   'mock',
 ] as const;
 

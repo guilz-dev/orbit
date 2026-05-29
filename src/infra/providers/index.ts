@@ -5,6 +5,7 @@ import { CodexProvider } from './codex.js';
 import { OpenCodeProvider } from './opencode.js';
 import { CursorProvider } from './cursor.js';
 import { CopilotProvider } from './copilot.js';
+import { OllamaProvider } from './ollama.js';
 import { MockProvider } from './mock.js';
 import type { Provider, ProviderType } from './types.js';
 
@@ -23,6 +24,7 @@ export class ProviderRegistry {
       opencode: new OpenCodeProvider(),
       cursor: new CursorProvider(),
       copilot: new CopilotProvider(),
+      ollama: new OllamaProvider(),
       mock: new MockProvider(),
     };
   }

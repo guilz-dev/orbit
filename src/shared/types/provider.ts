@@ -8,6 +8,7 @@ export type ProviderType =
   | 'opencode'
   | 'cursor'
   | 'copilot'
+  | 'ollama'
   | 'mock';
 
 export interface StreamInitEventData {

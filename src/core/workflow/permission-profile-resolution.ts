@@ -17,6 +17,7 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   opencode: { defaultPermissionMode: 'edit' },
   cursor: { defaultPermissionMode: 'edit' },
   copilot: { defaultPermissionMode: 'edit' },
+  ollama: { defaultPermissionMode: 'readonly' },
   mock: { defaultPermissionMode: 'edit' },
 };
 

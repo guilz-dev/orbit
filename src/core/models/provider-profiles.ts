@@ -13,6 +13,7 @@ export type ProviderProfileName =
   | 'opencode'
   | 'cursor'
   | 'copilot'
+  | 'ollama'
   | 'mock';
 
 /** Permission profile for a single provider. */

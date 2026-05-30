@@ -3,7 +3,7 @@
  */
 
 import { callCopilot, callCopilotCustom, type CopilotCallOptions } from '../copilot/index.js';
-import { resolveCopilotGithubToken, resolveCopilotCliPath } from '../config/index.js';
+import { resolveCopilotCliPath } from '../config/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
@@ -29,7 +29,6 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     effort: options.providerOptions?.copilot?.effort,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
-    copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
   };
 }

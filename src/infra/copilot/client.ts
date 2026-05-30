@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
+import { resolveCopilotGithubToken } from '../config/index.js';
 import { createLogger, crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
 import type { CopilotCallOptions } from './types.js';
 
@@ -95,7 +96,8 @@ function buildArgs(prompt: string, options: CopilotCallOptions & { shareFilePath
   return args;
 }
 
-function buildEnv(copilotGithubToken?: string): NodeJS.ProcessEnv {
+function buildEnv(): NodeJS.ProcessEnv {
+  const copilotGithubToken = resolveCopilotGithubToken();
   if (!copilotGithubToken) {
     return process.env;
   }
@@ -131,7 +133,7 @@ function execCopilot(args: string[], options: CopilotCallOptions): Promise<Copil
   return new Promise<CopilotExecResult>((resolve, reject) => {
     const child = crossSpawn(options.copilotCliPath ?? COPILOT_COMMAND, args, {
       cwd: options.cwd,
-      env: buildEnv(options.copilotGithubToken),
+      env: buildEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

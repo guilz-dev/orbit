@@ -75,6 +75,7 @@ describe('callCopilot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.TAKT_COPILOT_GITHUB_TOKEN;
     mockMkdtemp.mockResolvedValue('/tmp/takt-copilot-XXXXXX');
     mockReadFile.mockResolvedValue(
       '# 🤖 Copilot CLI Session\n\n> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`\n',
@@ -88,12 +89,13 @@ describe('callCopilot', () => {
       code: 0,
     });
 
+    process.env.TAKT_COPILOT_GITHUB_TOKEN = 'gh-token';
+
     const result = await callCopilot('coder', 'implement feature', {
       cwd: '/repo',
       model: 'claude-sonnet-4.6',
       sessionId: 'sess-prev',
       permissionMode: 'full',
-      copilotGithubToken: 'gh-token',
     });
 
     expect(result.status).toBe('done');
@@ -152,7 +154,7 @@ describe('callCopilot', () => {
     expect(args).not.toContain('--autopilot');
   });
 
-  it('should not inject COPILOT_GITHUB_TOKEN when copilotGithubToken is undefined', async () => {
+  it('should not inject COPILOT_GITHUB_TOKEN when resolver returns no token', async () => {
     mockSpawnWithScenario({
       stdout: 'done',
       code: 0,

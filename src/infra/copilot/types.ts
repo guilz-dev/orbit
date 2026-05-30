@@ -16,8 +16,6 @@ export interface CopilotCallOptions {
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
-  /** GitHub token for Copilot authentication */
-  copilotGithubToken?: string;
   /** Custom path to copilot executable */
   copilotCliPath?: string;
 }

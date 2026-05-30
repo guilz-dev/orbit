@@ -80,28 +80,6 @@ describe('CopilotProvider', () => {
         model: 'claude-sonnet-4.6',
         sessionId: 'sess-1',
         permissionMode: 'full',
-        copilotGithubToken: 'resolved-token',
-      }),
-    );
-  });
-
-  it('should prefer explicit copilotGithubToken over resolver', async () => {
-    mockResolveCopilotGithubToken.mockReturnValue('resolved-token');
-    mockCallCopilot.mockResolvedValue(doneResponse('coder'));
-
-    const provider = new CopilotProvider();
-    const agent = provider.setup({ name: 'coder' });
-
-    await agent.call('implement', {
-      cwd: '/tmp/work',
-      copilotGithubToken: 'explicit-token',
-    });
-
-    expect(mockCallCopilot).toHaveBeenCalledWith(
-      'coder',
-      'implement',
-      expect.objectContaining({
-        copilotGithubToken: 'explicit-token',
       }),
     );
   });

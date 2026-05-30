@@ -26,7 +26,6 @@ export interface ProviderCallOptions {
   openaiApiKey?: string;
   opencodeApiKey?: string;
   cursorApiKey?: string;
-  copilotGithubToken?: string;
   outputSchema?: Record<string, unknown>;
 }
 

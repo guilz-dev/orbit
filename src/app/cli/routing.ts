@@ -26,7 +26,7 @@ import { resolveAssistantProviderModelFromConfig } from '../../core/config/provi
 import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
 import { program, resolvedCwd, pipelineMode } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
-import { loadTaskHistory } from './taskHistory.js';
+import { buildInteractiveWorkflowContext } from '../../features/interactive/workflow-context.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
@@ -142,6 +142,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
 
   const previewCount = globalConfig.interactivePreviewSteps;
   const workflowDesc = getWorkflowDescription(workflowId, resolvedCwd, previewCount);
+  const workflowContext = buildInteractiveWorkflowContext(resolvedCwd, workflowId, lang, {
+    interactivePreviewSteps: previewCount,
+  });
 
   const availableInteractiveModes = sourceContext && !directTask
     ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')
@@ -156,13 +159,6 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     return;
   }
 
-  const workflowContext = {
-    name: workflowDesc.name,
-    description: workflowDesc.description,
-    workflowStructure: workflowDesc.workflowStructure,
-    stepPreviews: workflowDesc.stepPreviews,
-    taskHistory: loadTaskHistory(resolvedCwd, lang),
-  };
   const interactiveSeed = directTask || sourceContext
     ? {
       ...(directTask ? { userMessage: directTask } : {}),

@@ -29,3 +29,22 @@ export { runRetryMode, buildRetryTemplateVars, type RetryContext, type RetryFail
 export { dispatchConversationAction, type ConversationActionResult } from './actionDispatcher.js';
 export { findPreviousOrderContent } from './orderReader.js';
 export { type InteractiveImageAttachment } from './imageAttachments.js';
+export { buildInteractiveWorkflowContext } from './workflow-context.js';
+export { resolveGoSummaryInput, runFinalizeSummary } from './finalizeSummary.js';
+export {
+  headlessInteractiveStart,
+  headlessInteractiveTurn,
+  headlessInteractiveFinalize,
+  headlessInteractiveAccept,
+  headlessInteractiveCancel,
+  resolveHeadlessAllowedTools,
+  READONLY_HEADLESS_TOOLS,
+  type HeadlessInteractiveSnapshot,
+  type HeadlessStartPayload,
+  type HeadlessStartResult,
+  type HeadlessTurnPayload,
+  type HeadlessTurnResult,
+  type HeadlessFinalizePayload,
+  type HeadlessFinalizeResult,
+  type HeadlessAcceptResult,
+} from './headlessSession.js';

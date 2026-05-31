@@ -27,10 +27,10 @@ import {
   type ConversationMessage,
   type InteractiveSeedInput,
   type PostSummaryAction,
-  buildSummaryPrompt,
   selectPostSummaryAction,
   formatSessionStatus,
 } from './interactive.js';
+import { resolveGoSummaryInput, runFinalizeSummary } from './finalizeSummary.js';
 import { callAIWithRetry, type CallAIResult, type SessionContext } from './aiCaller.js';
 import {
   createInputLogMeta,
@@ -43,25 +43,6 @@ import { buildInteractiveResultWithAttachments, createSessionImageAttachmentStor
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
 
 const log = createLogger('conversation-loop');
-
-function resolveGoSummaryInput(
-  history: ConversationMessage[],
-  hasSessionContext: boolean,
-  hasSourceContext: boolean,
-  inlineTaskText: string,
-): { summaryHistory: ConversationMessage[]; userNote: string } {
-  if (history.length > 0 || hasSessionContext || hasSourceContext || !inlineTaskText) {
-    return {
-      summaryHistory: history,
-      userNote: inlineTaskText,
-    };
-  }
-
-  return {
-    summaryHistory: [{ role: 'user', content: inlineTaskText }],
-    userNote: '',
-  };
-}
 
 function findLatestAssistantMessage(history: ConversationMessage[]): ConversationMessage | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -130,8 +111,6 @@ export async function runConversationLoop(
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
   const ui = getLabelObject<InteractiveUIText>('interactive.ui', ctx.lang);
-  const conversationLabel = getLabel('interactive.conversationLabel', ctx.lang);
-  const noTranscript = getLabel('interactive.noTranscript', ctx.lang);
   const attachmentStore = createSessionImageAttachmentStore();
 
   info(strategy.introMessage);
@@ -257,47 +236,33 @@ export async function runConversationLoop(
       }
 
       case SlashCommand.Go: {
-        const { summaryHistory, userNote } = resolveGoSummaryInput(
-          history,
-          !!sessionId,
-          !!sourceContext,
-          match.text,
-        );
-        let summaryPrompt = buildSummaryPrompt(
-          summaryHistory,
-          !!sessionId,
-          ctx.lang,
-          noTranscript,
-          conversationLabel,
-          workflowContext,
-          sourceContext,
-          strategy.summaryPromptContext,
-        );
-        if (!summaryPrompt) {
-          info(ui.noConversation);
-          continue;
-        }
-        if (userNote) {
-          summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-        }
         process.stdin.pause();
         info(getLabel('interactive.ui.creatingInstruction', ctx.lang));
-        // Summary AI must not inherit the conversation session to avoid chat-mode behavior.
-        const { result: summaryResult } = await callAIWithRetry(
-          summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
-          { ...ctx, sessionId: undefined },
-        );
-        if (!summaryResult) {
-          info(ui.summarizeFailed);
-          continue;
-        }
-        if (!summaryResult.success) {
-          error(summaryResult.content);
+        const finalizeResult = await runFinalizeSummary({
+          cwd,
+          ctx,
+          history,
+          sourceContext,
+          userNote: match.text,
+          workflowContext,
+          allowedTools: strategy.allowedTools,
+          summaryPromptContext: strategy.summaryPromptContext,
+          providerSessionId: sessionId,
+        });
+        if (!finalizeResult.ok) {
+          if (finalizeResult.reason === 'no_conversation') {
+            info(ui.noConversation);
+            continue;
+          }
+          if (finalizeResult.reason === 'summarize_failed') {
+            info(ui.summarizeFailed);
+            continue;
+          }
+          error(finalizeResult.detail ?? '');
           blankLine();
           return buildInteractiveResultWithAttachments({ action: 'cancel', task: '' }, attachmentStore);
         }
-        const task = summaryResult.content.trim();
-        const selectedAction = await handleSummaryAction(task);
+        const selectedAction = await handleSummaryAction(finalizeResult.task);
         if (selectedAction === null) {
           continue;
         }

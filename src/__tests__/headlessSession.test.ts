@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { headlessInteractiveAccept } from '../features/interactive/headlessSession.js';
+import {
+  headlessInteractiveAccept,
+  headlessInteractivePlay,
+} from '../features/interactive/headlessSession.js';
 import {
   READONLY_HEADLESS_TOOLS,
   resolveHeadlessAllowedTools,
@@ -52,6 +55,43 @@ describe('headlessInteractiveAccept', () => {
     expect(result).toMatchObject({
       kind: 'accept',
       task: 'Task instruction draft',
+      allowedActions: ['execute', 'save_task'],
+    });
+  });
+});
+
+describe('headlessInteractivePlay', () => {
+  const baseSnapshot = {
+    planetzSessionId: 'composer_test',
+    cwd: '/tmp',
+    workflowId: 'default',
+    provider: 'mock',
+    lang: 'en' as const,
+    messages: [] as Array<{ role: 'user' | 'assistant'; content: string }>,
+    workflowContext: {
+      name: 'default',
+      description: '',
+      workflowStructure: '',
+      stepPreviews: [],
+      taskHistory: [],
+    },
+    systemPrompt: 'system',
+    allowedTools: [],
+    updatedAt: new Date().toISOString(),
+  };
+
+  it('returns error when task is empty', () => {
+    const { result } = headlessInteractivePlay(baseSnapshot, { task: '   ' });
+    expect(result.kind).toBe('error');
+  });
+
+  it('returns play task with execute and save_task actions', () => {
+    const { result } = headlessInteractivePlay(baseSnapshot, {
+      task: 'Run integration tests',
+    });
+    expect(result).toMatchObject({
+      kind: 'play',
+      task: 'Run integration tests',
       allowedActions: ['execute', 'save_task'],
     });
   });

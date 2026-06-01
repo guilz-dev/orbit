@@ -62,3 +62,15 @@ export type HeadlessAcceptResult =
       allowedActions: Array<'execute' | 'save_task'>;
     }
   | { kind: 'error'; error: string };
+
+export interface HeadlessPlayPayload {
+  task: string;
+}
+
+export type HeadlessPlayResult =
+  | {
+      kind: 'play';
+      task: string;
+      allowedActions: Array<'execute' | 'save_task'>;
+    }
+  | { kind: 'error'; error: string };

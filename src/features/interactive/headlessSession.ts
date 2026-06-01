@@ -14,6 +14,8 @@ import type {
   HeadlessFinalizePayload,
   HeadlessFinalizeResult,
   HeadlessInteractiveSnapshot,
+  HeadlessPlayPayload,
+  HeadlessPlayResult,
   HeadlessStartPayload,
   HeadlessStartResult,
   HeadlessTurnPayload,
@@ -30,6 +32,8 @@ export type {
   HeadlessFinalizePayload,
   HeadlessFinalizeResult,
   HeadlessInteractiveSnapshot,
+  HeadlessPlayPayload,
+  HeadlessPlayResult,
   HeadlessStartPayload,
   HeadlessStartResult,
   HeadlessTurnPayload,
@@ -286,6 +290,34 @@ export function headlessInteractiveAccept(
     result: {
       kind: 'accept',
       task: assistantMessage.content,
+      allowedActions: ['execute', 'save_task'],
+    },
+  };
+}
+
+/**
+ * Use explicit task text as the instruction (headless /play).
+ */
+export function headlessInteractivePlay(
+  snapshot: HeadlessInteractiveSnapshot,
+  payload: HeadlessPlayPayload,
+): { snapshot: HeadlessInteractiveSnapshot; result: HeadlessPlayResult } {
+  const task = payload.task.trim();
+  if (!task) {
+    return {
+      snapshot,
+      result: { kind: 'error', error: 'Task must not be empty' },
+    };
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      updatedAt: new Date().toISOString(),
+    },
+    result: {
+      kind: 'play',
+      task,
       allowedActions: ['execute', 'save_task'],
     },
   };

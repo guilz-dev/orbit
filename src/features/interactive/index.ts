@@ -36,6 +36,7 @@ export {
   headlessInteractiveTurn,
   headlessInteractiveFinalize,
   headlessInteractiveAccept,
+  headlessInteractivePlay,
   headlessInteractiveCancel,
   resolveHeadlessAllowedTools,
   READONLY_HEADLESS_TOOLS,
@@ -47,4 +48,6 @@ export {
   type HeadlessFinalizePayload,
   type HeadlessFinalizeResult,
   type HeadlessAcceptResult,
+  type HeadlessPlayPayload,
+  type HeadlessPlayResult,
 } from './headlessSession.js';

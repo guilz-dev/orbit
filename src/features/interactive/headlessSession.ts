@@ -6,6 +6,10 @@ import { resolveConfigValues } from '../../infra/config/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
+import {
+  createHeadlessStreamSink,
+  isHeadlessStreamEnabled,
+} from './headlessStreamSink.js';
 import { runFinalizeSummary } from './finalizeSummary.js';
 import { loadAssistantInitContext } from './assistantInitFiles.js';
 import { formatStepPreviews, type ConversationMessage } from './interactive.js';
@@ -100,13 +104,31 @@ async function callAssistant(
     isFirstTurn ? snapshot.assistantInitContext : undefined,
   );
 
-  const { result, sessionId: newProviderSessionId } = await callAIWithRetry(
-    promptWithTransform,
-    snapshot.systemPrompt,
-    snapshot.allowedTools,
-    snapshot.cwd,
-    ctx,
-  );
+  const streamSink = isHeadlessStreamEnabled()
+    ? createHeadlessStreamSink(snapshot.planetzSessionId)
+    : null;
+
+  let callResult: Awaited<ReturnType<typeof callAIWithRetry>>;
+  try {
+    callResult = await callAIWithRetry(
+      promptWithTransform,
+      snapshot.systemPrompt,
+      snapshot.allowedTools,
+      snapshot.cwd,
+      ctx,
+      streamSink ? { onStream: streamSink.onStream } : undefined,
+    );
+    if (callResult.result?.success) {
+      streamSink?.finish();
+    } else {
+      streamSink?.finish({ aborted: true });
+    }
+  } catch (error) {
+    streamSink?.finish({ aborted: true });
+    throw error;
+  }
+
+  const { result, sessionId: newProviderSessionId } = callResult;
 
   const next: HeadlessInteractiveSnapshot = {
     ...snapshot,

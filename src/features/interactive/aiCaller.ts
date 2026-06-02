@@ -15,6 +15,7 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 
 const log = createLogger('ai-caller');
 
@@ -35,6 +36,11 @@ export interface SessionContext {
   sessionId: string | undefined;
 }
 
+export interface CallAIWithRetryOptions {
+  /** When set, bypasses TTY StreamDisplay and forwards provider stream events here. */
+  onStream?: StreamCallback;
+}
+
 /**
  * Call AI with automatic retry on stale/invalid session.
  *
@@ -47,8 +53,11 @@ export async function callAIWithRetry(
   allowedTools: string[],
   cwd: string,
   ctx: SessionContext,
+  options?: CallAIWithRetryOptions,
 ): Promise<{ result: CallAIResult | null; sessionId: string | undefined }> {
-  const display = new StreamDisplay('assistant', isQuietMode());
+  const useCustomStream = options?.onStream !== undefined;
+  const display = useCustomStream ? null : new StreamDisplay('assistant', isQuietMode());
+  const streamHandler = options?.onStream ?? display!.createHandler();
   const abortController = new AbortController();
   let sigintCount = 0;
   const onSigInt = (): void => {
@@ -74,15 +83,16 @@ export async function callAIWithRetry(
       sessionId,
       allowedTools,
       abortSignal: abortController.signal,
-      onStream: display.createHandler(),
+      onStream: streamHandler,
     });
-    display.flush();
+    display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
 
     if (!success && sessionId) {
       log.info('Session invalid, retrying without session');
       sessionId = undefined;
-      const retryDisplay = new StreamDisplay('assistant', isQuietMode());
+      const retryDisplay = useCustomStream ? null : new StreamDisplay('assistant', isQuietMode());
+      const retryStreamHandler = options?.onStream ?? retryDisplay!.createHandler();
       const retryAgent = ctx.provider.setup({ name: ctx.personaName, systemPrompt });
       const retry = await retryAgent.call(prompt, {
         cwd,
@@ -90,9 +100,9 @@ export async function callAIWithRetry(
         sessionId: undefined,
         allowedTools,
         abortSignal: abortController.signal,
-        onStream: retryDisplay.createHandler(),
+        onStream: retryStreamHandler,
       });
-      retryDisplay.flush();
+      retryDisplay?.flush();
       if (retry.sessionId) {
         sessionId = retry.sessionId;
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -114,8 +124,10 @@ export async function callAIWithRetry(
   } catch (e) {
     const msg = getErrorMessage(e);
     log.error('AI call failed', { error: msg });
-    error(msg);
-    blankLine();
+    if (!useCustomStream) {
+      error(msg);
+      blankLine();
+    }
     return { result: null, sessionId };
   } finally {
     process.removeListener('SIGINT', onSigInt);

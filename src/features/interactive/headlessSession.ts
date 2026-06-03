@@ -13,6 +13,7 @@ import {
 import { runFinalizeSummary } from './finalizeSummary.js';
 import { loadAssistantInitContext } from './assistantInitFiles.js';
 import { formatStepPreviews, type ConversationMessage } from './interactive.js';
+import type { HeadlessToolsProfile } from './headlessSession.types.js';
 import type {
   HeadlessAcceptResult,
   HeadlessFinalizePayload,
@@ -25,7 +26,7 @@ import type {
   HeadlessTurnPayload,
   HeadlessTurnResult,
 } from './headlessSession.types.js';
-import { resolveHeadlessAllowedTools } from './headlessTools.js';
+import { resolveHeadlessAllowedTools, resolveHeadlessPermissionMode } from './headlessTools.js';
 import { buildInteractivePolicyPrompt } from './policyPrompt.js';
 import { prependInitialPromptContext } from './promptSections.js';
 import { initializeSession } from './sessionInitialization.js';
@@ -58,6 +59,15 @@ function findLatestAssistantMessage(
   return undefined;
 }
 
+/** Align chat session policies with `@planetz/shared` `resolveSessionToolsProfile`. */
+function toolsProfileForSessionPolicy(
+  sessionPolicy: HeadlessInteractiveSnapshot['sessionPolicy'],
+): HeadlessToolsProfile | undefined {
+  if (sessionPolicy === 'planetz-chat-agent') return 'planetz-agent-edit';
+  if (sessionPolicy === 'planetz-chat-investigate') return 'planetz-investigate';
+  return undefined;
+}
+
 function resolveSystemTemplateName(sessionPolicy: HeadlessInteractiveSnapshot['sessionPolicy']): string {
   switch (sessionPolicy) {
     case 'planetz-chat-investigate':
@@ -65,7 +75,7 @@ function resolveSystemTemplateName(sessionPolicy: HeadlessInteractiveSnapshot['s
     case 'planetz-chat-spec':
       return 'score_planetz_chat_spec_system_prompt';
     case 'planetz-chat-agent':
-      return 'score_planetz_chat_investigate_system_prompt';
+      return 'score_planetz_chat_agent_system_prompt';
     default:
       return 'score_interactive_system_prompt';
   }
@@ -134,7 +144,12 @@ async function callAssistant(
       snapshot.allowedTools,
       snapshot.cwd,
       ctx,
-      streamSink ? { onStream: streamSink.onStream } : undefined,
+      {
+        ...(streamSink ? { onStream: streamSink.onStream } : {}),
+        permissionMode: resolveHeadlessPermissionMode(
+          toolsProfileForSessionPolicy(snapshot.sessionPolicy),
+        ),
+      },
     );
     // Reserve `aborted` for explicit user interrupts; normal failures should keep streamed context visible.
     streamSink?.finish();

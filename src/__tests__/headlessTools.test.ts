@@ -26,4 +26,17 @@ describe('headlessTools', () => {
       'Bash',
     ]);
   });
+
+  it('adds Write and Edit for planetz-agent-edit profile', () => {
+    expect(resolveHeadlessAllowedTools('planetz-agent-edit')).toEqual([
+      'Read',
+      'Glob',
+      'Grep',
+      'WebSearch',
+      'WebFetch',
+      'Bash',
+      'Write',
+      'Edit',
+    ]);
+  });
 });

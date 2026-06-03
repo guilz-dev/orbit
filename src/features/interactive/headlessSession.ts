@@ -58,13 +58,26 @@ function findLatestAssistantMessage(
   return undefined;
 }
 
+function resolveSystemTemplateName(sessionPolicy: HeadlessInteractiveSnapshot['sessionPolicy']): string {
+  switch (sessionPolicy) {
+    case 'planetz-chat-investigate':
+      return 'score_planetz_chat_investigate_system_prompt';
+    case 'planetz-chat-spec':
+      return 'score_planetz_chat_spec_system_prompt';
+    case 'planetz-chat-agent':
+      return 'score_planetz_chat_investigate_system_prompt';
+    default:
+      return 'score_interactive_system_prompt';
+  }
+}
+
 function buildSystemPrompt(
   cwd: string,
   lang: 'en' | 'ja',
-  snapshot: Pick<HeadlessInteractiveSnapshot, 'workflowContext'>,
+  snapshot: Pick<HeadlessInteractiveSnapshot, 'workflowContext' | 'sessionPolicy'>,
 ): string {
   const hasPreview = !!snapshot.workflowContext.stepPreviews?.length;
-  return loadTemplate('score_interactive_system_prompt', lang, {
+  return loadTemplate(resolveSystemTemplateName(snapshot.sessionPolicy), lang, {
     hasWorkflowPreview: hasPreview,
     workflowStructure: snapshot.workflowContext.workflowStructure ?? '',
     stepDetails: hasPreview
@@ -100,7 +113,12 @@ async function callAssistant(
 ): Promise<{ snapshot: HeadlessInteractiveSnapshot; content?: string; error?: string }> {
   const ctx = createSessionContext(snapshot);
   const promptWithTransform = prependInitialPromptContext(
-    buildInteractivePolicyPrompt(ctx.lang, userMessage, snapshot.sourceContext),
+    buildInteractivePolicyPrompt(
+      ctx.lang,
+      userMessage,
+      snapshot.sourceContext,
+      snapshot.sessionPolicy,
+    ),
     isFirstTurn ? snapshot.assistantInitContext : undefined,
   );
 
@@ -176,6 +194,7 @@ export async function headlessInteractiveStart(
     assistantInitContext: loadAssistantInitContext(input.cwd),
     systemPrompt: '',
     allowedTools: resolveHeadlessAllowedTools(input.toolsProfile),
+    sessionPolicy: input.sessionPolicy,
     updatedAt: new Date().toISOString(),
   };
 

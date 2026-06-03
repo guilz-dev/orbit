@@ -2,7 +2,19 @@ import type { ConversationMessage, WorkflowContext } from './interactive.js';
 
 export type HeadlessInteractiveSessionMode = 'assistant';
 
-export type HeadlessToolsProfile = 'readonly' | 'orbit-default';
+export type HeadlessToolsProfile =
+  | 'readonly'
+  | 'orbit-default'
+  | 'planetz-readonly'
+  | 'planetz-investigate'
+  | 'planetz-agent-edit'
+  | 'planetz-orbit-default';
+
+export type HeadlessSessionPolicy =
+  | 'planetz-task-planning'
+  | 'planetz-chat-investigate'
+  | 'planetz-chat-agent'
+  | 'planetz-chat-spec';
 
 export interface HeadlessInteractiveSnapshot {
   planetzSessionId: string;
@@ -18,6 +30,7 @@ export interface HeadlessInteractiveSnapshot {
   assistantInitContext?: string;
   systemPrompt: string;
   allowedTools: string[];
+  sessionPolicy?: HeadlessSessionPolicy;
   updatedAt: string;
 }
 
@@ -28,6 +41,7 @@ export interface HeadlessStartPayload {
   provider?: string;
   model?: string;
   seed?: { userMessage?: string; sourceContext?: string };
+  sessionPolicy?: HeadlessSessionPolicy;
   toolsProfile?: HeadlessToolsProfile;
 }
 

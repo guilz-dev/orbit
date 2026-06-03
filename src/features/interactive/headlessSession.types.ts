@@ -1,3 +1,4 @@
+import type { McpServerConfig } from '../../core/models/index.js';
 import type { ConversationMessage, WorkflowContext } from './interactive.js';
 
 export type HeadlessInteractiveSessionMode = 'assistant';
@@ -31,6 +32,7 @@ export interface HeadlessInteractiveSnapshot {
   systemPrompt: string;
   allowedTools: string[];
   sessionPolicy?: HeadlessSessionPolicy;
+  mcpServers?: Record<string, McpServerConfig>;
   updatedAt: string;
 }
 
@@ -43,6 +45,8 @@ export interface HeadlessStartPayload {
   seed?: { userMessage?: string; sourceContext?: string };
   sessionPolicy?: HeadlessSessionPolicy;
   toolsProfile?: HeadlessToolsProfile;
+  mcpServers?: Record<string, McpServerConfig>;
+  allowedToolsOverride?: string[];
 }
 
 export interface HeadlessTurnPayload {

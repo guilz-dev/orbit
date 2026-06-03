@@ -149,6 +149,7 @@ async function callAssistant(
         permissionMode: resolveHeadlessPermissionMode(
           toolsProfileForSessionPolicy(snapshot.sessionPolicy),
         ),
+        mcpServers: snapshot.mcpServers,
       },
     );
     // Reserve `aborted` for explicit user interrupts; normal failures should keep streamed context visible.
@@ -196,6 +197,11 @@ export async function headlessInteractiveStart(
     model: input.model,
   });
 
+  const baseAllowedTools = resolveHeadlessAllowedTools(input.toolsProfile);
+  const allowedTools = input.allowedToolsOverride && input.allowedToolsOverride.length > 0
+    ? Array.from(new Set([...baseAllowedTools, ...input.allowedToolsOverride]))
+    : baseAllowedTools;
+
   let snapshot: HeadlessInteractiveSnapshot = {
     planetzSessionId: input.planetzSessionId,
     cwd: input.cwd,
@@ -208,8 +214,9 @@ export async function headlessInteractiveStart(
     workflowContext,
     assistantInitContext: loadAssistantInitContext(input.cwd),
     systemPrompt: '',
-    allowedTools: resolveHeadlessAllowedTools(input.toolsProfile),
+    allowedTools,
     sessionPolicy: input.sessionPolicy,
+    ...(input.mcpServers ? { mcpServers: input.mcpServers } : {}),
     updatedAt: new Date().toISOString(),
   };
 

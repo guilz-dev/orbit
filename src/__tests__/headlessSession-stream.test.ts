@@ -30,6 +30,7 @@ vi.mock('../features/interactive/assistantInitFiles.js', () => ({
 
 vi.mock('../features/interactive/headlessTools.js', () => ({
   resolveHeadlessAllowedTools: () => ['Read'],
+  resolveHeadlessPermissionMode: () => 'readonly',
 }));
 
 vi.mock('../features/interactive/policyPrompt.js', () => ({

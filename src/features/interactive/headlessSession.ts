@@ -118,13 +118,10 @@ async function callAssistant(
       ctx,
       streamSink ? { onStream: streamSink.onStream } : undefined,
     );
-    if (callResult.result?.success) {
-      streamSink?.finish();
-    } else {
-      streamSink?.finish({ aborted: true });
-    }
+    // Reserve `aborted` for explicit user interrupts; normal failures should keep streamed context visible.
+    streamSink?.finish();
   } catch (error) {
-    streamSink?.finish({ aborted: true });
+    streamSink?.finish();
     throw error;
   }
 

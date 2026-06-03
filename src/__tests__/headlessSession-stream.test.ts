@@ -104,7 +104,7 @@ describe('headlessSession stream sink finish', () => {
     expect(terminal?.aborted).toBeUndefined();
   });
 
-  it('emits aborted done when callAIWithRetry returns unsuccessful result', async () => {
+  it('emits done without aborted when callAIWithRetry returns unsuccessful result', async () => {
     callAIWithRetryMock.mockResolvedValue({
       result: { content: 'blocked', success: false, sessionId: undefined },
       sessionId: undefined,
@@ -114,6 +114,8 @@ describe('headlessSession stream sink finish', () => {
     await headlessInteractiveTurn(baseSnapshot(), { message: 'hi' });
 
     const lines = parseStderrLines();
-    expect(lines.at(-1)).toMatchObject({ done: true, aborted: true });
+    const terminal = lines.at(-1);
+    expect(terminal).toMatchObject({ done: true });
+    expect(terminal?.aborted).toBeUndefined();
   });
 });

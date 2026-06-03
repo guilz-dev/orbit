@@ -13,6 +13,7 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
+import type { PermissionMode } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { getProvider } from '../../infra/providers/index.js';
 import type { ProviderImageAttachment } from '../../infra/providers/types.js';
@@ -42,6 +43,8 @@ export interface CallAIWithRetryOptions {
   imageAttachments?: ProviderImageAttachment[];
   /** When set, bypasses TTY StreamDisplay and forwards provider stream events here. */
   onStream?: StreamCallback;
+  /** Provider permission profile for headless Chat agent / investigate modes. */
+  permissionMode?: PermissionMode;
 }
 
 /**
@@ -89,6 +92,7 @@ export async function callAIWithRetry(
       model: ctx.model,
       sessionId,
       allowedTools,
+      permissionMode: options?.permissionMode,
       abortSignal: abortController.signal,
       onStream: streamHandler,
       imageAttachments: nativeImageAttachments,
@@ -107,6 +111,7 @@ export async function callAIWithRetry(
         model: ctx.model,
         sessionId: undefined,
         allowedTools,
+        permissionMode: options?.permissionMode,
         abortSignal: abortController.signal,
         onStream: retryStreamHandler,
         imageAttachments: nativeImageAttachments,

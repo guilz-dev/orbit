@@ -21,7 +21,7 @@ function resolvePolicyTemplateName(sessionPolicy: HeadlessSessionPolicy | undefi
     case 'planetz-chat-spec':
       return 'score_planetz_chat_spec_policy';
     case 'planetz-chat-agent':
-      return 'score_planetz_chat_investigate_policy';
+      return 'score_planetz_chat_agent_policy';
     default:
       return 'score_interactive_policy';
   }

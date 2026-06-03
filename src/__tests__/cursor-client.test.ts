@@ -17,6 +17,7 @@ import { callCursor } from '../infra/cursor/client.js';
 
 type SpawnScenario = {
   stdout?: string;
+  stdoutChunks?: string[];
   stderr?: string;
   code?: number | null;
   signal?: NodeJS.Signals | null;
@@ -42,6 +43,11 @@ function mockSpawnWithScenario(scenario: SpawnScenario): void {
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
+      if (scenario.stdoutChunks) {
+        for (const chunk of scenario.stdoutChunks) {
+          child.stdout.emit('data', Buffer.from(chunk, 'utf-8'));
+        }
+      }
       if (scenario.stdout) {
         child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
       }
@@ -192,5 +198,48 @@ describe('callCursor', () => {
 
     expect(result.status).toBe('error');
     expect(result.content).toContain('Failed to parse cursor-agent JSON output');
+  });
+
+  it('should stream partial assistant text from stream-json output', async () => {
+    mockSpawnWithScenario({
+      stdoutChunks: [
+        '{"type":"system","subtype":"init","session_id":"sess-stream","model":"Composer 2.5"}\n',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hel"}]},"session_id":"sess-stream","timestamp_ms":1}\n',
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"lo"}]},"session_id":"sess-stream","timestamp_ms":2}\n{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}]},"session_id":"sess-stream"}\n',
+        '{"type":"result","subtype":"success","result":"Hello","session_id":"sess-stream","is_error":false}\n',
+      ],
+      code: 0,
+    });
+
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const result = await callCursor('coder', 'implement feature', {
+      cwd: '/repo',
+      onStream: (event) => {
+        events.push({ type: event.type, data: event.data as Record<string, unknown> });
+      },
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('Hello');
+    expect(result.sessionId).toBe('sess-stream');
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).toEqual([
+      '-p',
+      '--trust',
+      '--output-format',
+      'stream-json',
+      '--workspace',
+      '/repo',
+      '--stream-partial-output',
+      '--',
+      'implement feature',
+    ]);
+    expect(events).toEqual([
+      { type: 'init', data: { model: 'Composer 2.5', sessionId: 'sess-stream' } },
+      { type: 'text', data: { text: 'Hel' } },
+      { type: 'text', data: { text: 'lo' } },
+      { type: 'result', data: { result: 'Hello', success: true, sessionId: 'sess-stream' } },
+    ]);
   });
 });

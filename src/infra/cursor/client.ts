@@ -14,6 +14,18 @@ const CURSOR_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const CURSOR_FORCE_KILL_DELAY_MS_DEFAULT = 1_000;
 const CURSOR_ERROR_DETAIL_MAX_LENGTH = 400;
 
+type CursorStreamSummary =
+  | {
+      success: true;
+      result: string;
+      sessionId?: string;
+    }
+  | {
+      success: false;
+      error: string;
+      sessionId?: string;
+    };
+
 function resolveForceKillDelayMs(): number {
   const raw = process.env.TAKT_CURSOR_FORCE_KILL_DELAY_MS;
   if (!raw) {
@@ -47,8 +59,19 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
   return `${systemPrompt}\n\n${prompt}`;
 }
 
-function buildArgs(prompt: string, options: CursorCallOptions): string[] {
-  const args = ['-p', '--trust', '--output-format', 'json', '--workspace', options.cwd];
+function buildArgs(prompt: string, options: CursorCallOptions, streamJson = false): string[] {
+  const args = [
+    '-p',
+    '--trust',
+    '--output-format',
+    streamJson ? 'stream-json' : 'json',
+    '--workspace',
+    options.cwd,
+  ];
+
+  if (streamJson) {
+    args.push('--stream-partial-output');
+  }
 
   if (options.model) {
     args.push('--model', options.model);
@@ -98,7 +121,25 @@ function createExecError(
   return error;
 }
 
-function execCursor(args: string[], options: CursorCallOptions): Promise<CursorExecResult> {
+function feedLineBuffer(
+  chunk: string,
+  buffer: { remainder: string },
+  onLine: (line: string) => void,
+): void {
+  buffer.remainder += chunk;
+  let newlineIndex = buffer.remainder.indexOf('\n');
+  while (newlineIndex >= 0) {
+    onLine(buffer.remainder.slice(0, newlineIndex));
+    buffer.remainder = buffer.remainder.slice(newlineIndex + 1);
+    newlineIndex = buffer.remainder.indexOf('\n');
+  }
+}
+
+function execCursor(
+  args: string[],
+  options: CursorCallOptions,
+  hooks?: { onStdoutLine?: (line: string) => void },
+): Promise<CursorExecResult> {
   return new Promise<CursorExecResult>((resolve, reject) => {
     const child = crossSpawn(options.cursorCliPath ?? CURSOR_COMMAND, args, {
       cwd: options.cwd,
@@ -112,6 +153,7 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
     let stderrBytes = 0;
     let settled = false;
     let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    const stdoutLineBuffer = { remainder: '' };
 
     const abortHandler = (): void => {
       if (settled) return;
@@ -180,7 +222,13 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       stderr += text;
     };
 
-    child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+      appendChunk('stdout', text);
+      if (hooks?.onStdoutLine) {
+        feedLineBuffer(text, stdoutLineBuffer, hooks.onStdoutLine);
+      }
+    });
     child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
 
     child.on('error', (error: NodeJS.ErrnoException) => {
@@ -205,6 +253,10 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       }
 
       if (code === 0) {
+        if (hooks?.onStdoutLine && stdoutLineBuffer.remainder.length > 0) {
+          hooks.onStdoutLine(stdoutLineBuffer.remainder);
+          stdoutLineBuffer.remainder = '';
+        }
         resolveOnce({ stdout, stderr });
         return;
       }
@@ -319,6 +371,24 @@ function extractSessionId(payload: unknown): string | undefined {
   ]);
 }
 
+function extractAssistantDelta(payload: unknown): string | undefined {
+  const record = toRecord(payload);
+  const message = toRecord(record?.message);
+  const content = message?.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const parts = content
+    .map((entry) => {
+      const block = toRecord(entry);
+      return block?.type === 'text' && typeof block.text === 'string' ? block.text : undefined;
+    })
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+
+  return parts.length > 0 ? parts.join('') : undefined;
+}
+
 function trimDetail(value: string | undefined, fallback = ''): string {
   const normalized = (value ?? '').trim();
   if (!normalized) {
@@ -399,15 +469,219 @@ function parseCursorOutput(stdout: string): { content: string; sessionId?: strin
   return { content, sessionId };
 }
 
+function parseCursorStreamSummary(stdout: string): CursorStreamSummary | undefined {
+  const lines = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  let streamedText = '';
+  let latestSessionId: string | undefined;
+
+  for (const line of lines) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const record = toRecord(parsed);
+    if (!record) {
+      continue;
+    }
+
+    const sessionId = firstNonEmptyString([record.session_id, record.sessionId]);
+    if (sessionId) {
+      latestSessionId = sessionId;
+    }
+
+    if (record.type === 'assistant') {
+      const delta = extractAssistantDelta(record);
+      if (delta) {
+        const nextChunk = delta.startsWith(streamedText)
+          ? delta.slice(streamedText.length)
+          : delta;
+        streamedText += nextChunk;
+      }
+      continue;
+    }
+
+    if (record.type === 'result') {
+      const success = record.subtype === 'success' || record.is_error === false;
+      const result = typeof record.result === 'string' ? record.result : streamedText;
+      if (success) {
+        return { success: true, result, sessionId: latestSessionId };
+      }
+
+      const error =
+        firstNonEmptyString([
+          record.error,
+          record.message,
+          typeof record.result === 'string' ? record.result : undefined,
+        ]) ?? 'Cursor Agent CLI returned an error';
+      return { success: false, error, sessionId: latestSessionId };
+    }
+  }
+
+  if (streamedText) {
+    return { success: true, result: streamedText, sessionId: latestSessionId };
+  }
+
+  return undefined;
+}
+
+function forwardCursorStreamLine(
+  rawLine: string,
+  options: CursorCallOptions,
+  state: {
+    latestSessionId?: string;
+    sawStreamEvent: boolean;
+    finalResult?: CursorStreamSummary;
+    streamedText: string;
+  },
+): void {
+  const trimmed = rawLine.trim();
+  if (!trimmed || !options.onStream) {
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return;
+  }
+
+  const record = toRecord(parsed);
+  if (!record) {
+    return;
+  }
+
+  state.sawStreamEvent = true;
+  const sessionId = firstNonEmptyString([record.session_id, record.sessionId]);
+  if (sessionId) {
+    state.latestSessionId = sessionId;
+  }
+
+  if (record.type === 'system' && record.subtype === 'init') {
+    options.onStream({
+      type: 'init',
+      data: {
+        model: typeof record.model === 'string' ? record.model : options.model ?? '',
+        sessionId: state.latestSessionId ?? options.sessionId ?? '',
+      },
+    });
+    return;
+  }
+
+  if (record.type === 'assistant') {
+    const delta = extractAssistantDelta(record);
+    if (!delta) {
+      return;
+    }
+    const nextChunk = delta.startsWith(state.streamedText)
+      ? delta.slice(state.streamedText.length)
+      : delta;
+    if (!nextChunk) {
+      return;
+    }
+    state.streamedText += nextChunk;
+    options.onStream({ type: 'text', data: { text: nextChunk } });
+    return;
+  }
+
+  if (record.type === 'result') {
+    const success = record.subtype === 'success' || record.is_error === false;
+    if (success) {
+      const result = typeof record.result === 'string' ? record.result : '';
+      state.finalResult = {
+        success: true,
+        result,
+        sessionId: state.latestSessionId ?? options.sessionId,
+      };
+      options.onStream({
+        type: 'result',
+        data: {
+          result,
+          success: true,
+          sessionId: state.latestSessionId ?? options.sessionId ?? '',
+        },
+      });
+      return;
+    }
+
+    const error =
+      firstNonEmptyString([
+        record.error,
+        record.message,
+        typeof record.result === 'string' ? record.result : undefined,
+      ]) ?? 'Cursor Agent CLI returned an error';
+    state.finalResult = {
+      success: false,
+      error,
+      sessionId: state.latestSessionId ?? options.sessionId,
+    };
+    options.onStream({
+      type: 'result',
+      data: {
+        result: '',
+        success: false,
+        error,
+        sessionId: state.latestSessionId ?? options.sessionId ?? '',
+      },
+    });
+  }
+}
+
 /**
  * Client for Cursor Agent CLI interactions.
  */
 export class CursorClient {
   async call(agentType: string, prompt: string, options: CursorCallOptions): Promise<AgentResponse> {
-    const args = buildArgs(prompt, options);
+    const streamJson = typeof options.onStream === 'function';
+    const args = buildArgs(prompt, options, streamJson);
+    const streamState = {
+      latestSessionId: options.sessionId,
+      sawStreamEvent: false,
+      finalResult: undefined as CursorStreamSummary | undefined,
+      streamedText: '',
+    };
 
     try {
-      const { stdout } = await execCursor(args, options);
+      const { stdout } = await execCursor(
+        args,
+        options,
+        streamJson
+          ? {
+              onStdoutLine: (line) => {
+                forwardCursorStreamLine(line, options, streamState);
+              },
+            }
+          : undefined,
+      );
+
+      if (streamJson) {
+        const streamed = streamState.finalResult ?? parseCursorStreamSummary(stdout);
+        if (streamed) {
+          return streamed.success
+            ? {
+                persona: agentType,
+                status: 'done',
+                content: streamed.result,
+                timestamp: new Date(),
+                sessionId: streamed.sessionId ?? streamState.latestSessionId,
+              }
+            : {
+                persona: agentType,
+                status: 'error',
+                content: streamed.error,
+                timestamp: new Date(),
+                sessionId: streamed.sessionId ?? streamState.latestSessionId,
+              };
+        }
+      }
+
       const parsed = parseCursorOutput(stdout);
       if ('error' in parsed) {
         return {
@@ -421,15 +695,18 @@ export class CursorClient {
 
       const sessionId = parsed.sessionId ?? options.sessionId;
       if (options.onStream) {
-        options.onStream({ type: 'text', data: { text: parsed.content } });
-        options.onStream({
-          type: 'result',
-          data: {
-            result: parsed.content,
-            success: true,
-            sessionId: sessionId ?? '',
-          },
-        });
+        const shouldEmitFallbackStream = !streamJson || !streamState.sawStreamEvent;
+        if (shouldEmitFallbackStream) {
+          options.onStream({ type: 'text', data: { text: parsed.content } });
+          options.onStream({
+            type: 'result',
+            data: {
+              result: parsed.content,
+              success: true,
+              sessionId: sessionId ?? '',
+            },
+          });
+        }
       }
 
       return {

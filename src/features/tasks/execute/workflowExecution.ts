@@ -8,7 +8,11 @@ import { AbortHandler } from './abortHandler.js';
 import { createIterationLimitHandler, createUserInputHandler } from './iterationLimitHandler.js';
 import { createWorkflowExecutionBootstrap } from './workflowExecutionBootstrap.js';
 import { createWorkflowExecutionContext, createWorkflowCallResolver } from './workflowExecutionContext.js';
-import { bindWorkflowExecutionEvents, type WorkflowExecutionEventBridge } from './workflowExecutionEvents.js';
+import {
+  bindWorkflowExecutionEvents,
+  resolveWorkflowExecutionLastStep,
+  type WorkflowExecutionEventBridge,
+} from './workflowExecutionEvents.js';
 import { createLogger } from '../../../shared/utils/index.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
@@ -203,7 +207,7 @@ async function executeWorkflowInternal(
     return {
       success: finalState.status === 'completed',
       reason: eventBridge.state.abortReason,
-      lastStep: eventBridge.state.lastStepName,
+      lastStep: resolveWorkflowExecutionLastStep(eventBridge.state),
       lastMessage: eventBridge.state.lastStepContent,
       exceeded: eventBridge.state.exceededInfo != null,
       ...(eventBridge.state.exceededInfo ? { exceededInfo: eventBridge.state.exceededInfo } : {}),

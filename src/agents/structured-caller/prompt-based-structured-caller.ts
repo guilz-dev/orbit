@@ -166,6 +166,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     return withRetry(async () => {
       const response = await runAgent(options.persona, prompt, {
         cwd: options.cwd,
+        projectCwd: options.projectCwd,
         personaPath: options.personaPath,
         language: options.language,
         model: options.model,
@@ -207,6 +208,7 @@ export class PromptBasedStructuredCaller implements StructuredCaller {
     return withRetry(async () => {
       const response = await runAgent(options.persona, prompt, {
         cwd: options.cwd,
+        projectCwd: options.projectCwd,
         personaPath: options.personaPath,
         language: options.language,
         model: options.model,

@@ -23,10 +23,28 @@ export interface WorkflowExecutionEventState {
   abortReason?: string;
   exceededInfo?: ExceededInfo;
   lastStepContent?: string;
+  /** Last step that completed successfully. */
   lastStepName?: string;
+  /** Step that started but may not have completed (used for abort failure attribution). */
+  lastStartedStepName?: string;
   lastResumePoint?: WorkflowExecutionOptions['resumePoint'];
   currentIteration: number;
   sessionLog: SessionLog;
+}
+
+export function resolveAbortFailureStep(
+  state: Pick<WorkflowExecutionEventState, 'lastStartedStepName' | 'lastStepName'>,
+): string | undefined {
+  return state.lastStartedStepName ?? state.lastStepName;
+}
+
+export function resolveWorkflowExecutionLastStep(
+  state: Pick<WorkflowExecutionEventState, 'abortReason' | 'lastStartedStepName' | 'lastStepName'>,
+): string | undefined {
+  if (state.abortReason != null) {
+    return resolveAbortFailureStep(state);
+  }
+  return state.lastStepName;
 }
 
 interface WorkflowExecutionEventBridgeDeps {
@@ -176,6 +194,7 @@ export function bindWorkflowExecutionEvents(
 
   deps.engine.on('step:start', (step, iteration, instruction, providerInfo) => {
     state.currentIteration = iteration;
+    state.lastStartedStepName = step.name;
     state.lastResumePoint = getResumePoint();
     deps.runMetaManager.updateStep(step.name, iteration, state.lastResumePoint);
 
@@ -228,6 +247,7 @@ export function bindWorkflowExecutionEvents(
     syncLatestResumePoint();
     state.lastStepContent = response.content;
     state.lastStepName = step.name;
+    state.lastStartedStepName = undefined;
 
     if (deps.displayRef.current) {
       deps.displayRef.current.flush();
@@ -308,12 +328,13 @@ export function bindWorkflowExecutionEvents(
     }
     deps.prefixWriter?.flush();
     state.abortReason = reason;
+    const failedStepName = resolveAbortFailureStep(state);
     state.sessionLog = finalizeWorkflowAbort(
       state.sessionLog,
       reason,
       deps.task,
       deps.workflowConfig.name,
-      state.lastStepName,
+      failedStepName,
       deps.projectCwd,
       deps.out.warn,
     );

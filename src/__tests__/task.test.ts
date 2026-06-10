@@ -511,6 +511,26 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(failed[0]?.failure?.last_message).toBe('last message');
   });
 
+  it('persists workflow abort failure step from run result (not last completed step)', () => {
+    runner.addTask('Task abort-step');
+    const task = runner.claimNextTasks(1)[0]!;
+
+    runner.failTask({
+      task,
+      success: false,
+      response: 'Step execution failed: persona path not allowed',
+      executionLog: ['write_tests report'],
+      failureStep: 'implement',
+      failureLastMessage: 'write_tests report',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const file = loadTasksFile(testDir);
+    expect(file.tasks[0]?.failure?.step).toBe('implement');
+    expect(file.tasks[0]?.failure?.error).toContain('persona path not allowed');
+  });
+
   it('should mark pending task as failed with started_at and branch', () => {
     const task = runner.addTask('Task C', { branch: 'takt/task-c' });
     const startedAt = new Date().toISOString();

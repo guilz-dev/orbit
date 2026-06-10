@@ -291,7 +291,8 @@ export function getClaudeProjectSessionsDir(projectDir: string): string {
   // Claude CLI encodes the path by replacing '/' and other special chars with '-'
   // Based on observed behavior: /Users/takt -> -Users-takt
   const encodedPath = resolvedPath.replace(/[/\\_ ]/g, '-');
-  return join(homedir(), '.claude', 'projects', encodedPath);
+  const homeDir = process.env.HOME?.trim() || homedir();
+  return join(homeDir, '.claude', 'projects', encodedPath);
 }
 
 /**

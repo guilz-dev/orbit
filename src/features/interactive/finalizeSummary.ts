@@ -9,6 +9,7 @@ import {
   type ConversationMessage,
   type WorkflowContext,
 } from './interactive.js';
+import type { ProviderImageAttachment } from '../../infra/providers/types.js';
 
 export function resolveGoSummaryInput(
   history: ConversationMessage[],
@@ -39,6 +40,7 @@ export interface RunFinalizeSummaryInput {
   allowedTools: string[];
   summaryPromptContext?: string;
   providerSessionId?: string;
+  imageAttachments?: ProviderImageAttachment[];
 }
 
 export type RunFinalizeSummaryResult =
@@ -87,6 +89,7 @@ export async function runFinalizeSummary(
     input.allowedTools,
     input.cwd,
     { ...input.ctx, sessionId: undefined },
+    { imageAttachments: input.imageAttachments },
   );
 
   if (!summaryResult) {

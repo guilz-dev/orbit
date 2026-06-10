@@ -253,6 +253,10 @@ export async function runConversationLoop(
           allowedTools: strategy.allowedTools,
           summaryPromptContext: strategy.summaryPromptContext,
           providerSessionId: sessionId,
+          imageAttachments: attachmentStore.listAttachments().map((attachment) => ({
+            placeholder: attachment.placeholder,
+            path: attachment.tempPath,
+          })),
         });
         if (!finalizeResult.ok) {
           if (finalizeResult.reason === 'no_conversation') {

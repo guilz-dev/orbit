@@ -21,6 +21,7 @@ function toOllamaOptions(options: ProviderCallOptions): OllamaCallOptions {
 /** Ollama provider — local OpenAI-compatible HTTP API */
 export class OllamaProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsNativeImageInput = false;
 
   setup(config: AgentSetup): ProviderAgent {
     const { name, systemPrompt } = config;

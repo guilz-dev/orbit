@@ -255,7 +255,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         structuredCaller,
       },
       getCwd: () => worktreeCwd,
+      getWorkflowName: () => 'workflow',
       getInteractive: () => false,
+      observabilityEnabled: false,
     } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
       engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
     });

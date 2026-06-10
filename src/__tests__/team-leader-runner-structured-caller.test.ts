@@ -138,6 +138,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       2,
       expect.objectContaining({
         cwd: '/tmp/project',
+        projectCwd: '/tmp/project',
         model: 'opencode/zai-coding-plan/glm-5.1',
         persona: 'team-leader',
         provider: 'opencode',
@@ -159,6 +160,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       19,
       expect.objectContaining({
         cwd: '/tmp/project',
+        projectCwd: '/tmp/project',
         model: 'opencode/zai-coding-plan/glm-5.1',
         persona: 'team-leader',
         provider: 'opencode',
@@ -170,6 +172,100 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect.objectContaining({
         name: 'implement',
         persona: 'team-leader',
+      }),
+    );
+  });
+
+  it('passes projectCwd when execution cwd is a worktree clone', async () => {
+    mockExecuteAgent.mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'API done',
+      timestamp: new Date('2026-04-01T00:00:00.000Z'),
+    });
+    const resolveStepProviderModel = vi.fn().mockReturnValue({
+      provider: 'cursor',
+      model: 'composer',
+    });
+    const projectCwd = '/tmp/isolated/repo';
+    const worktreeCwd = '/tmp/isolated/takt-worktrees/task-1';
+
+    const structuredCaller = {
+      decomposeTask: vi.fn().mockImplementation(async (_instruction, _maxParts, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'team-leader-system',
+          userInstruction: 'leader instruction',
+        });
+        return [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+      }),
+      requestMoreParts: vi.fn().mockResolvedValue({
+        done: true,
+        reasoning: 'enough',
+        parts: [],
+      }),
+    };
+
+    const runner = new TeamLeaderRunner({
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd: worktreeCwd, projectCwd }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel,
+      },
+      stepExecutor: {
+        buildInstruction: vi.fn().mockReturnValue('leader instruction'),
+        applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        persistPreviousResponseSnapshot: vi.fn(),
+        emitStepReports: vi.fn(),
+      },
+      engineOptions: {
+        projectCwd,
+        structuredCaller,
+      },
+      getCwd: () => worktreeCwd,
+      getInteractive: () => false,
+    } as ConstructorParameters<typeof TeamLeaderRunner>[0] & {
+      engineOptions: { projectCwd: string; structuredCaller: typeof structuredCaller };
+    });
+
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'Task: {task}',
+      teamLeader: {
+        persona: 'team-leader',
+        maxParts: 2,
+        refillThreshold: 0,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    };
+
+    const state: WorkflowState = {
+      workflowName: 'dual',
+      currentStep: 'implement',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      lastOutput: undefined,
+      previousResponseSourcePath: undefined,
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      status: 'running',
+    };
+
+    await runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn());
+
+    const [, , decomposeOptions] = structuredCaller.decomposeTask.mock.calls[0] ?? [];
+    expect(decomposeOptions).toEqual(
+      expect.objectContaining({
+        cwd: worktreeCwd,
+        projectCwd,
       }),
     );
   });

@@ -1,7 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
-import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import {
+  bindWorkflowExecutionEvents,
+  resolveAbortFailureStep,
+  resolveWorkflowExecutionLastStep,
+} from '../features/tasks/execute/workflowExecutionEvents.js';
+import type { SessionLog } from '../infra/fs/index.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 
 class TestEngine extends EventEmitter {
@@ -17,17 +22,44 @@ class TestEngine extends EventEmitter {
 function createBridgeHarness(options?: {
   currentProvider?: string;
   configuredModel?: string;
-  resumePoint?: WorkflowResumePoint;
+  resumePoint?: WorkflowResumePoint | null;
+  workflowConfig?: {
+    name: string;
+    steps: Array<{ name: string }>;
+    maxSteps: number | 'infinite';
+  };
+  sessionLog?: SessionLog;
 }) {
-  const resumePoint = options?.resumePoint ?? {
+  const defaultResumePoint = {
     version: 1,
     stack: [{ workflow: 'parent', step: 'review', kind: 'agent' }],
     iteration: 2,
     elapsed_ms: 100,
   } satisfies WorkflowResumePoint;
-  const engine = new TestEngine(resumePoint);
+  const usePlainEngine = options?.resumePoint === null;
+  const resumePoint = usePlainEngine
+    ? undefined
+    : options?.resumePoint ?? defaultResumePoint;
+  const engine = usePlainEngine
+    ? Object.assign(new EventEmitter(), { getResumePoint: () => undefined })
+    : new TestEngine(resumePoint!);
+  const workflowConfig = options?.workflowConfig ?? {
+    name: 'parent',
+    maxSteps: 5,
+    steps: [{ name: 'review' }],
+  };
+  const sessionLog = options?.sessionLog ?? {
+    task: 'task',
+    projectDir: '/tmp/project',
+    workflowName: workflowConfig.name,
+    iterations: 0,
+    startTime: new Date().toISOString(),
+    status: 'running',
+    history: [],
+  };
   const out = {
     info: vi.fn(),
+    warn: vi.fn(),
     blankLine: vi.fn(),
     status: vi.fn(),
     error: vi.fn(),
@@ -46,11 +78,7 @@ function createBridgeHarness(options?: {
   };
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
-    workflowConfig: {
-      name: 'parent',
-      maxSteps: 5,
-      steps: [{ name: 'review' }],
-    },
+    workflowConfig,
     task: 'task',
     projectCwd: '/tmp/project',
     currentProvider: options?.currentProvider ?? 'mock',
@@ -67,6 +95,7 @@ function createBridgeHarness(options?: {
       setStep: vi.fn(),
       setProvider: vi.fn(),
       logUsage: vi.fn(),
+      onStepComplete: vi.fn(),
     } as never,
     analyticsEmitter: {
       updateProviderInfo: vi.fn(),
@@ -88,21 +117,47 @@ function createBridgeHarness(options?: {
     shouldNotifyWorkflowComplete: false,
     shouldNotifyWorkflowAbort: false,
     writeTraceReportOnce: vi.fn(),
-    getCurrentWorkflowStack: () => resumePoint.stack,
+    getCurrentWorkflowStack: () => resumePoint?.stack,
     initialResumePoint: resumePoint,
-    sessionLog: {
-      task: 'task',
-      projectDir: '/tmp/project',
-      workflowName: 'parent',
-      iterations: 0,
-      startTime: new Date().toISOString(),
-      status: 'running',
-      history: [],
-    },
+    sessionLog,
   });
 
   return { bridge, engine, out, runMetaManager, resumePoint };
 }
+
+function minimalStep(name: string): WorkflowStep {
+  return {
+    name,
+    persona: 'coder',
+    personaDisplayName: 'coder',
+    instruction: 'do work',
+    rules: [],
+  };
+}
+
+describe('workflow execution failure step helpers', () => {
+  it('resolveAbortFailureStep prefers last started step over last completed step', () => {
+    expect(resolveAbortFailureStep({
+      lastStartedStepName: 'implement',
+      lastStepName: 'write_tests',
+    })).toBe('implement');
+  });
+
+  it('resolveWorkflowExecutionLastStep uses abort attribution only when aborted', () => {
+    const aborted = {
+      abortReason: 'Step execution failed',
+      lastStartedStepName: 'implement',
+      lastStepName: 'write_tests',
+    };
+    const completed = {
+      lastStartedStepName: undefined,
+      lastStepName: 'review',
+    };
+
+    expect(resolveWorkflowExecutionLastStep(aborted)).toBe('implement');
+    expect(resolveWorkflowExecutionLastStep(completed)).toBe('review');
+  });
+});
 
 describe('bindWorkflowExecutionEvents', () => {
   it('event bridge が run meta と実行結果を同期する', () => {
@@ -177,6 +232,43 @@ describe('bindWorkflowExecutionEvents', () => {
     });
 
     expect(out.info).toHaveBeenCalledWith('Reasoning effort: high');
+  });
+
+  it('abort 時は最後に開始した step を失敗 step として追跡する', () => {
+    const { bridge, engine } = createBridgeHarness({
+      resumePoint: null,
+      workflowConfig: {
+        name: 'dual',
+        steps: [{ name: 'write_tests' }, { name: 'implement' }],
+        maxSteps: 30,
+      },
+      sessionLog: {
+        sessionId: 'sess-1',
+        task: 'task',
+        workflow: 'dual',
+        startTime: new Date().toISOString(),
+        status: 'running',
+        iterations: 0,
+      },
+    });
+
+    const providerInfo = { provider: 'cursor' as const, model: 'composer' };
+
+    engine.emit('step:start', minimalStep('write_tests'), 2, 'instr', providerInfo);
+    engine.emit(
+      'step:complete',
+      minimalStep('write_tests'),
+      { persona: 'coder', status: 'done', content: 'tests done', timestamp: new Date() },
+      'instr',
+    );
+    engine.emit('step:start', minimalStep('implement'), 3, 'instr', providerInfo);
+    engine.emit('workflow:abort', { iteration: 3 }, 'Step execution failed');
+
+    expect(bridge.state.lastStepName).toBe('write_tests');
+    expect(bridge.state.lastStartedStepName).toBe('implement');
+    expect(bridge.state.abortReason).toBe('Step execution failed');
+    expect(resolveAbortFailureStep(bridge.state)).toBe('implement');
+    expect(resolveWorkflowExecutionLastStep(bridge.state)).toBe('implement');
   });
 
   it('verbose 時に OpenCode variant の解決ソースを表示する', () => {

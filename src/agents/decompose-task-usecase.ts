@@ -13,6 +13,8 @@ import {
 
 export interface DecomposeTaskOptions {
   cwd: string;
+  /** Project root for persona path validation when cwd is a worktree clone. */
+  projectCwd?: string;
   persona?: string;
   personaPath?: string;
   language?: Language;
@@ -36,13 +38,16 @@ export interface MorePartsResponse {
 
 export const TEAM_LEADER_MAX_TURNS = 5;
 
-export async function decomposeTask(
-  instruction: string,
-  maxParts: number,
+function buildTeamLeaderRunAgentOptions(
   options: DecomposeTaskOptions,
-): Promise<PartDefinition[]> {
-  const response = await runAgent(options.persona, buildDecomposePrompt(instruction, maxParts, options.language), {
+  callOptions: {
+    outputSchema?: RunAgentOptions['outputSchema'];
+    onPromptResolved?: DecomposeTaskOptions['onPromptResolved'];
+  },
+): RunAgentOptions {
+  return {
     cwd: options.cwd,
+    projectCwd: options.projectCwd,
     personaPath: options.personaPath,
     language: options.language,
     model: options.model,
@@ -52,11 +57,26 @@ export async function decomposeTask(
     allowedTools: [],
     permissionMode: 'readonly',
     ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
-    outputSchema: loadDecompositionSchema(maxParts),
+    outputSchema: callOptions.outputSchema,
     onStream: options.onStream,
     workflowMeta: options.workflowMeta,
-    onPromptResolved: options.onPromptResolved,
-  });
+    onPromptResolved: callOptions.onPromptResolved,
+  };
+}
+
+export async function decomposeTask(
+  instruction: string,
+  maxParts: number,
+  options: DecomposeTaskOptions,
+): Promise<PartDefinition[]> {
+  const response = await runAgent(
+    options.persona,
+    buildDecomposePrompt(instruction, maxParts, options.language),
+    buildTeamLeaderRunAgentOptions(options, {
+      outputSchema: loadDecompositionSchema(maxParts),
+      onPromptResolved: options.onPromptResolved,
+    }),
+  );
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;
@@ -86,21 +106,13 @@ export async function requestMoreParts(
     options.language,
   );
 
-  const response = await runAgent(options.persona, prompt, {
-    cwd: options.cwd,
-    personaPath: options.personaPath,
-    language: options.language,
-    model: options.model,
-    provider: options.provider,
-    resolvedModel: options.resolvedModel,
-    resolvedProvider: options.resolvedProvider,
-    allowedTools: [],
-    permissionMode: 'readonly',
-    ...buildMaxTurnsOption(options.provider, options.resolvedProvider, TEAM_LEADER_MAX_TURNS),
-    outputSchema: loadMorePartsSchema(maxAdditionalParts),
-    onStream: options.onStream,
-    workflowMeta: options.workflowMeta,
-  });
+  const response = await runAgent(
+    options.persona,
+    prompt,
+    buildTeamLeaderRunAgentOptions(options, {
+      outputSchema: loadMorePartsSchema(maxAdditionalParts),
+    }),
+  );
 
   if (response.status !== 'done') {
     const detail = response.error || response.content || response.status;

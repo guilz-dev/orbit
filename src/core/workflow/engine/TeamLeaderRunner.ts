@@ -13,11 +13,18 @@ import { runTeamLeaderExecution } from './team-leader-execution.js';
 import { buildTeamLeaderAggregatedContent } from './team-leader-aggregation.js';
 import { resolvePartErrorDetail, summarizeParts } from './team-leader-common.js';
 import { buildTeamLeaderParallelLoggerOptions, emitTeamLeaderProgressHint } from './team-leader-streaming.js';
+import type { DecomposeTaskOptions } from '../../../agents/decompose-task-usecase.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { WorkflowEngineOptions, PhaseName, PhasePromptParts } from '../types.js';
-import type { RuntimeStepResolution, StepRunResult } from '../types.js';
+import type {
+  PhaseName,
+  PhasePromptParts,
+  ProviderType,
+  RuntimeStepResolution,
+  StepRunResult,
+  WorkflowEngineOptions,
+} from '../types.js';
 import { buildTeamLeaderErrorPartResult, runTeamLeaderPart } from './team-leader-part-runner.js';
 
 const log = createLogger('team-leader-runner');
@@ -97,22 +104,24 @@ export class TeamLeaderRunner {
     if (!structuredCaller) {
       throw new Error('structuredCaller is required for team leader execution');
     }
-    const parts = await structuredCaller.decomposeTask(instruction, teamLeaderConfig.maxParts, {
-      cwd: this.deps.getCwd(),
-      persona: leaderStep.persona,
-      personaPath: leaderStep.personaPath,
-      model: leaderModel,
-      provider: leaderProvider,
-      resolvedModel: leaderModel,
-      resolvedProvider: leaderProvider,
-      workflowMeta: leaderWorkflowMeta,
-      onStream: this.deps.engineOptions.onStream,
-      onPromptResolved: (promptParts) => {
-        if (didEmitPhaseStart) return;
-        this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
-        didEmitPhaseStart = true;
-      },
-    });
+    const parts = await structuredCaller.decomposeTask(
+      instruction,
+      teamLeaderConfig.maxParts,
+      this.buildStructuredCallerOptions(
+        leaderStep,
+        leaderBaseOptions,
+        leaderProvider,
+        leaderModel,
+        leaderWorkflowMeta,
+        {
+          onPromptResolved: (promptParts) => {
+            if (didEmitPhaseStart) return;
+            this.deps.onPhaseStart?.(leaderStep, 1, 'execute', promptParts.userInstruction, promptParts, undefined, parentIteration);
+            didEmitPhaseStart = true;
+          },
+        },
+      ),
+    );
     if (!didEmitPhaseStart) {
       throw new Error(`Missing prompt parts for phase start: ${leaderStep.name}:1`);
     }
@@ -201,18 +210,13 @@ export class TeamLeaderRunner {
           })),
           scheduledIds,
           remainingPartBudget,
-          {
-            cwd: this.deps.getCwd(),
-            persona: leaderStep.persona,
-            personaPath: leaderStep.personaPath,
-            language: this.deps.engineOptions.language,
-            model: leaderModel,
-            provider: leaderProvider,
-            resolvedModel: leaderModel,
-            resolvedProvider: leaderProvider,
-            workflowMeta: leaderWorkflowMeta,
-            onStream: this.deps.engineOptions.onStream,
-          },
+          this.buildStructuredCallerOptions(
+            leaderStep,
+            leaderBaseOptions,
+            leaderProvider,
+            leaderModel,
+            leaderWorkflowMeta,
+          ),
         );
       },
       runPart: async (part, partIndex) => this.runSinglePart(
@@ -301,6 +305,30 @@ export class TeamLeaderRunner {
     this.deps.stepExecutor.emitStepReports(step);
 
     return { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+  }
+
+  private buildStructuredCallerOptions(
+    leaderStep: WorkflowStep,
+    leaderBaseOptions: RunAgentOptions,
+    leaderProvider: ProviderType | undefined,
+    leaderModel: string | undefined,
+    leaderWorkflowMeta: RunAgentOptions['workflowMeta'],
+    extra?: Pick<DecomposeTaskOptions, 'onPromptResolved'>,
+  ): DecomposeTaskOptions {
+    return {
+      cwd: leaderBaseOptions.cwd ?? this.deps.getCwd(),
+      projectCwd: leaderBaseOptions.projectCwd ?? this.deps.engineOptions.projectCwd,
+      persona: leaderStep.persona,
+      personaPath: leaderStep.personaPath,
+      language: this.deps.engineOptions.language,
+      model: leaderModel,
+      provider: leaderProvider,
+      resolvedModel: leaderModel,
+      resolvedProvider: leaderProvider,
+      workflowMeta: leaderWorkflowMeta,
+      onStream: this.deps.engineOptions.onStream,
+      ...extra,
+    };
   }
 
   private async runSinglePart(

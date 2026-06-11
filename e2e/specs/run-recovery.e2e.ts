@@ -219,7 +219,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
 
       expect(rerunResult.exitCode, formatTaktRunResult(rerunResult)).toBe(0);
       const combined = rerunResult.stdout + rerunResult.stderr;
-      expect(combined).toMatch(/(?:Marked|Recovered) 1 interrupted running task\(s\)/);
+      expect(combined).toContain('Marked 1 interrupted running task(s) as failed.');
       expect(combined).toContain('recovery-target-2');
 
       const finalTasks = readTasks(tasksFile);

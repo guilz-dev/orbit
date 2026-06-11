@@ -33,3 +33,21 @@ Recent history uses concise Conventional Commit-style messages such as `fix: ...
 ## Security & Configuration Tips
 
 Never commit API keys or tokens. Use `~/.takt/config.yaml`, project `.takt/config.yaml`, or environment variables for configuration. Review docs before changing provider, sandbox, credential, or runtime behavior.
+
+## Cursor Cloud specific instructions
+
+Dependencies (`npm install`) are refreshed automatically by the Cloud Agent update script. Standard commands above still apply; notes below are only the non-obvious bits for this environment.
+
+- **Runtime:** the VM default `node` is v22 (`/exec-daemon/node`), which satisfies `engines.node >=18.19.0`, so this repo's `npm` commands work as-is with no Node switching. (Node 24 is also installed via nvm for the sibling `planetz` repo.)
+- **Build before running the CLI/dist:** `dist/` is generated. Run `npm run build` before exercising `bin/takt` or anything that loads `dist/`.
+- **Run the engine end-to-end with no API keys:** use the built-in `mock` provider. `npm run test:e2e:mock` covers CLI/workflow flows. For a one-shot manual run, drive the mock with a scenario file via `TAKT_MOCK_SCENARIO` (see `e2e/fixtures/scenarios/*.json` and `e2e/fixtures/workflows/*.yaml`). Example hello-world that completes a workflow:
+
+  ```bash
+  TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/execute-done.json \
+    bin/takt --task "demo" \
+    --workflow e2e/fixtures/workflows/mock-single-step.yaml \
+    --provider mock --pipeline --skip-git
+  ```
+
+  Built-in workflows like `default-mini` use tag-based routing and will abort under the generic mock unless the scenario emits the matching `[STEP:N]` tag.
+- **Real providers** (claude/codex/opencode/cursor/copilot) need their own API keys/CLIs and are not configured here; `test:e2e:provider:*` will not run without them.

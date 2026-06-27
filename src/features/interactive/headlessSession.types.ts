@@ -15,7 +15,9 @@ export type HeadlessSessionPolicy =
   | 'planetz-task-planning'
   | 'planetz-chat-investigate'
   | 'planetz-chat-agent'
-  | 'planetz-chat-spec';
+  | 'planetz-chat-spec'
+  | 'planetz-chat-clarify'
+  | 'planetz-chat-decide';
 
 export interface HeadlessInteractiveSnapshot {
   planetzSessionId: string;

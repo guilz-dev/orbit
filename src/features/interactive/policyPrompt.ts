@@ -19,6 +19,8 @@ function resolvePolicyTemplateName(sessionPolicy: HeadlessSessionPolicy | undefi
     case 'planetz-chat-investigate':
       return 'score_planetz_chat_investigate_policy';
     case 'planetz-chat-spec':
+    case 'planetz-chat-clarify':
+    case 'planetz-chat-decide':
       return 'score_planetz_chat_spec_policy';
     case 'planetz-chat-agent':
       return 'score_planetz_chat_agent_policy';

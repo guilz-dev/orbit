@@ -54,4 +54,32 @@ describe('buildInteractivePolicyPrompt', () => {
     expect(result).toContain('```text');
     expect(result.indexOf('PR文脈')).toBeLessThan(result.indexOf('ユーザー入力'));
   });
+
+  it('uses the spec policy template for Planetz clarify sessions', () => {
+    const buildPrompt = buildInteractivePolicyPrompt as unknown as (
+      lang: 'en' | 'ja',
+      userMessage: string,
+      sourceContext?: string,
+      sessionPolicy?: string,
+    ) => string;
+
+    const result = buildPrompt('en', 'User input', undefined, 'planetz-chat-clarify');
+
+    expect(result).toContain('Spec drafting policy');
+    expect(result).not.toContain('Interactive Mode Policy');
+  });
+
+  it('uses the spec policy template for Planetz decide sessions', () => {
+    const buildPrompt = buildInteractivePolicyPrompt as unknown as (
+      lang: 'en' | 'ja',
+      userMessage: string,
+      sourceContext?: string,
+      sessionPolicy?: string,
+    ) => string;
+
+    const result = buildPrompt('ja', 'ユーザー入力', undefined, 'planetz-chat-decide');
+
+    expect(result).toContain('仕様作成ポリシー');
+    expect(result).not.toContain('対話モードポリシー');
+  });
 });

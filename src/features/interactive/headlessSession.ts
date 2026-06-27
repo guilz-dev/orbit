@@ -65,6 +65,14 @@ function toolsProfileForSessionPolicy(
 ): HeadlessToolsProfile | undefined {
   if (sessionPolicy === 'planetz-chat-agent') return 'planetz-agent-edit';
   if (sessionPolicy === 'planetz-chat-investigate') return 'planetz-investigate';
+  if (
+    sessionPolicy === 'planetz-task-planning'
+    || sessionPolicy === 'planetz-chat-spec'
+    || sessionPolicy === 'planetz-chat-clarify'
+    || sessionPolicy === 'planetz-chat-decide'
+  ) {
+    return 'planetz-readonly';
+  }
   return undefined;
 }
 
@@ -73,6 +81,8 @@ function resolveSystemTemplateName(sessionPolicy: HeadlessInteractiveSnapshot['s
     case 'planetz-chat-investigate':
       return 'score_planetz_chat_investigate_system_prompt';
     case 'planetz-chat-spec':
+    case 'planetz-chat-clarify':
+    case 'planetz-chat-decide':
       return 'score_planetz_chat_spec_system_prompt';
     case 'planetz-chat-agent':
       return 'score_planetz_chat_agent_system_prompt';
@@ -262,6 +272,7 @@ export async function headlessInteractiveTurn(
     messages: [...snapshot.messages, { role: 'user', content: trimmed }],
     updatedAt: new Date().toISOString(),
   };
+  next.systemPrompt = buildSystemPrompt(next.cwd, next.lang, next);
 
   const isFirstAiTurn = !snapshot.messages.some((m) => m.role === 'assistant');
 

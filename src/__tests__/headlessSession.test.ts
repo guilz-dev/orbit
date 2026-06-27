@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   headlessInteractiveAccept,
   headlessInteractivePlay,
   headlessInteractiveStart,
 } from '../features/interactive/headlessSession.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 
 vi.mock('../infra/config/index.js', () => ({
   resolveConfigValues: vi.fn(() => ({
@@ -41,6 +42,10 @@ import {
   resolveHeadlessAllowedTools,
 } from '../features/interactive/headlessTools.js';
 
+beforeEach(() => {
+  vi.mocked(loadTemplate).mockClear();
+});
+
 describe('headlessInteractiveStart', () => {
   it('stores sourceContext on snapshot when seed has no user message', async () => {
     const { snapshot } = await headlessInteractiveStart({
@@ -51,6 +56,36 @@ describe('headlessInteractiveStart', () => {
     });
     expect(snapshot.sourceContext).toBe('## Issue #7: Example');
     expect(snapshot.messages).toEqual([]);
+  });
+
+  it('uses the spec system prompt template for Planetz clarify sessions', async () => {
+    await headlessInteractiveStart({
+      cwd: '/tmp',
+      workflow: 'spec-clarify',
+      planetzSessionId: 'composer_clarify',
+      sessionPolicy: 'planetz-chat-clarify',
+    });
+
+    expect(loadTemplate).toHaveBeenCalledWith(
+      'score_planetz_chat_spec_system_prompt',
+      'en',
+      expect.any(Object),
+    );
+  });
+
+  it('uses the spec system prompt template for Planetz decide sessions', async () => {
+    await headlessInteractiveStart({
+      cwd: '/tmp',
+      workflow: 'spec-decide',
+      planetzSessionId: 'composer_decide',
+      sessionPolicy: 'planetz-chat-decide',
+    });
+
+    expect(loadTemplate).toHaveBeenCalledWith(
+      'score_planetz_chat_spec_system_prompt',
+      'en',
+      expect.any(Object),
+    );
   });
 });
 

@@ -54,10 +54,9 @@ steps:
           format: plan-frontend
   - name: implement
     edit: true
-    persona: coder
+    persona: front-mock-coder
     policy:
-      - coding
-      - testing
+      - mock-implementation
       - design-fidelity
     knowledge:
       - frontend
@@ -75,9 +74,9 @@ steps:
           - WebSearch
           - WebFetch
     required_permission_mode: edit
-    instruction: implement
+    instruction: implement-frontend-mock
     rules:
-      - condition: Implementation complete
+      - condition: Mock UI implementation complete
         next: reviewers
       - condition: Cannot proceed, insufficient info
         next: ABORT
@@ -89,8 +88,8 @@ steps:
       report:
         - name: coder-scope.md
           format: coder-scope
-        - name: coder-decisions.md
-          format: coder-decisions
+        - name: mock-ui-summary.md
+          format: mock-ui-summary
   - name: reviewers
     parallel:
       - name: ai-antipattern-review-2nd
@@ -156,10 +155,9 @@ steps:
     parallel:
       - name: ai-antipattern-fix-parallel
         edit: true
-        persona: coder
+        persona: front-mock-coder
         policy:
-          - coding
-          - testing
+          - mock-implementation
           - design-fidelity
         knowledge:
           - frontend
@@ -183,10 +181,9 @@ steps:
         instruction: ai-antipattern-fix
       - name: supervise_fix_parallel
         edit: true
-        persona: coder
+        persona: front-mock-coder
         policy:
-          - coding
-          - testing
+          - mock-implementation
           - design-fidelity
         knowledge:
           - frontend
@@ -214,10 +211,9 @@ steps:
         next: implement
   - name: ai-antipattern-fix
     edit: true
-    persona: coder
+    persona: front-mock-coder
     policy:
-      - coding
-      - testing
+      - mock-implementation
       - design-fidelity
     knowledge:
       - frontend
@@ -245,10 +241,9 @@ steps:
         next: implement
   - name: supervise_fix
     edit: true
-    persona: coder
+    persona: front-mock-coder
     policy:
-      - coding
-      - testing
+      - mock-implementation
       - design-fidelity
     knowledge:
       - frontend

@@ -20,6 +20,7 @@ workflow_categories:
       - frontend
       - frontend-mini
       - frontend-maintenance
+      - frontend-refactor-mock
   ⚙️ バックエンド:
     workflows:
       - backend

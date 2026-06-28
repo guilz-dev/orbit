@@ -1,6 +1,6 @@
 # Kubernetes / Docker知識
 
-コンテナイメージと Kubernetes デプロイのパターン。`backend` と `observability` 知識と併用する。
+コンテナイメージと Kubernetes デプロイのパターン。`backend` と `reliability-slo`、`incident-response` 知識と併用する。
 
 ## イメージ
 

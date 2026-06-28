@@ -1,6 +1,6 @@
 # Goバックエンド知識
 
-慣用的な Go サービスのパターン。`backend`、`api-design`、`sql-rdb` と併用する。
+慣用的な Go サービスのパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。
 
 ## エラー
 

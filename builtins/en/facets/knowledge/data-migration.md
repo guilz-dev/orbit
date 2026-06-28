@@ -1,6 +1,6 @@
 # Data Migration Knowledge
 
-Safe schema and data migrations, especially under zero-downtime deploys. Pair with `sql-rdb` and `existing-system`.
+Safe schema and data migrations, especially under zero-downtime deploys. Pair with `db-schema-design`, `indexing-query-tuning` and `existing-system`.
 
 ## Expand–Contract
 

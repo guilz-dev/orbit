@@ -1,6 +1,6 @@
 # Pythonバックエンド知識
 
-FastAPI / Django バックエンドのパターン。`backend`、`api-design`、`sql-rdb` と併用する。
+FastAPI / Django バックエンドのパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。
 
 ## 非同期とブロッキング
 

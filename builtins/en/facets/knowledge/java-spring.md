@@ -1,6 +1,6 @@
 # Java / Spring Knowledge
 
-Spring Boot service patterns. Pair with `backend`, `api-design`, `sql-rdb`.
+Spring Boot service patterns. Pair with `backend`, `api-design`, `db-schema-design`, `indexing-query-tuning`.
 
 ## Layering & DI
 

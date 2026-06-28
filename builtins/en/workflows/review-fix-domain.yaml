@@ -1,0 +1,122 @@
+name: review-fix-domain
+description: >
+  Knowledge-driven domain review with fix loop. Default knowledge is frontend.
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 30
+initial_step: gather
+loop_monitors:
+  - cycle:
+      - domain-review
+      - fix
+    threshold: 3
+    judge:
+      persona: domain-reviewer
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (progress being made)
+          next: domain-review
+        - condition: Unproductive (repeated findings, fixes not applied)
+          next: supervise
+
+steps:
+  - name: gather
+    edit: false
+    persona: planner
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
+    rules:
+      - condition: Review target information gathered
+        next: domain-review
+      - condition: Unable to identify review target, insufficient information
+        next: ABORT
+
+  - name: domain-review
+    edit: false
+    persona: domain-reviewer
+    policy: review
+    knowledge: frontend
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    instruction: review-domain
+    output_contracts:
+      report:
+        - name: domain-review.md
+          format: domain-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: fix
+
+  - name: fix
+    edit: true
+    persona: domain-coder
+    policy: review
+    knowledge: frontend
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Edit
+          - Write
+          - Bash
+          - WebSearch
+          - WebFetch
+    required_permission_mode: edit
+    pass_previous_response: false
+    instruction: fix
+    rules:
+      - condition: Fixes complete
+        next: domain-review
+      - condition: Unable to proceed with fixes
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    pass_previous_response: false
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+    rules:
+      - condition: Review integration complete
+        next: COMPLETE

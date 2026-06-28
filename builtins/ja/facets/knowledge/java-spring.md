@@ -1,6 +1,6 @@
 # Java / Spring知識
 
-Spring Boot サービスのパターン。`backend`、`api-design`、`sql-rdb` と併用する。
+Spring Boot サービスのパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。
 
 ## レイヤリングと DI
 

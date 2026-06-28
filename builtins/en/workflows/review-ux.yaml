@@ -1,0 +1,85 @@
+name: review-ux
+description: >
+  UX-focused review (state coverage, navigation, accessibility, design fidelity).
+  Does not review code quality or architecture. For implementation fixes use review-fix-frontend.
+workflow_config:
+  provider_options:
+    codex:
+      network_access: true
+    opencode:
+      network_access: true
+max_steps: 10
+initial_step: gather
+
+steps:
+  - name: gather
+    edit: false
+    persona: planner
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: gather-review
+    output_contracts:
+      report:
+        - name: review-target.md
+          format: review-gather
+    rules:
+      - condition: Review target information gathered
+        next: ux-review
+      - condition: Unable to identify review target, insufficient information
+        next: ABORT
+
+  - name: ux-review
+    edit: false
+    persona: ux-reviewer
+    policy: ux
+    knowledge: ux
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    instruction: review-ux
+    output_contracts:
+      report:
+        - name: ux-review.md
+          format: ux-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: supervise
+
+  - name: supervise
+    edit: false
+    persona: supervisor
+    policy: review
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    pass_previous_response: false
+    instruction: supervise
+    output_contracts:
+      report:
+        - name: supervisor-validation.md
+          format: supervisor-validation
+        - name: summary.md
+          format: summary
+          use_judge: false
+    rules:
+      - condition: Review integration complete
+        next: COMPLETE

@@ -1,6 +1,6 @@
 # Ruby on Rails Knowledge
 
-Rails (ActiveRecord, MVC) patterns. Pair with `backend`, `api-design`, `sql-rdb`.
+Rails (ActiveRecord, MVC) patterns. Pair with `backend`, `api-design`, `db-schema-design`, `indexing-query-tuning`.
 
 ## Models & Queries
 

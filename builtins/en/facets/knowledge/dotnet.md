@@ -1,6 +1,6 @@
 # .NET / ASP.NET Core Knowledge
 
-ASP.NET Core + EF Core service patterns. Pair with `backend`, `api-design`, `sql-rdb`.
+ASP.NET Core + EF Core service patterns. Pair with `backend`, `api-design`, `db-schema-design`, `indexing-query-tuning`.
 
 ## Async & DI
 

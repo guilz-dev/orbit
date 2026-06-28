@@ -1,6 +1,6 @@
 # Python Backend Knowledge
 
-FastAPI / Django backend patterns. Pair with `backend`, `api-design`, and `sql-rdb`.
+FastAPI / Django backend patterns. Pair with `backend`, `api-design`, and `db-schema-design`, `indexing-query-tuning`.
 
 ## Async & Blocking
 

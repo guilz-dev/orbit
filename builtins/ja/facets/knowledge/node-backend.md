@@ -1,6 +1,6 @@
 # Node.jsバックエンド知識
 
-Express / NestJS サービスのパターン。`backend`、`api-design`、`sql-rdb` と併用する。汎用 backend を超える Node 固有の課題に使う。
+Express / NestJS サービスのパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。汎用 backend を超える Node 固有の課題に使う。
 
 ## 非同期とエラー
 

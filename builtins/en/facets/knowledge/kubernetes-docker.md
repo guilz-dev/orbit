@@ -1,6 +1,6 @@
 # Kubernetes / Docker Knowledge
 
-Container image and Kubernetes deployment patterns. Pair with `backend` and `observability` knowledge.
+Container image and Kubernetes deployment patterns. Pair with `backend` and `reliability-slo`, `incident-response` knowledge.
 
 ## Images
 

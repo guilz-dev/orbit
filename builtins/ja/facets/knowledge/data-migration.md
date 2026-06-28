@@ -1,6 +1,6 @@
 # データマイグレーション知識
 
-ゼロダウンタイムデプロイ下でも安全なスキーマ・データマイグレーション。`sql-rdb` と `existing-system` と併用する。
+ゼロダウンタイムデプロイ下でも安全なスキーマ・データマイグレーション。`db-schema-design`、`indexing-query-tuning` と `existing-system` と併用する。
 
 ## Expand–Contract
 

@@ -1,6 +1,6 @@
 # Node.js Backend Knowledge
 
-Express / NestJS service patterns. Pair with `backend`, `api-design`, `sql-rdb`. Use this for Node-specific concerns beyond generic backend.
+Express / NestJS service patterns. Pair with `backend`, `api-design`, `db-schema-design`, `indexing-query-tuning`. Use this for Node-specific concerns beyond generic backend.
 
 ## Async & Errors
 

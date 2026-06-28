@@ -1,6 +1,6 @@
 # Ruby on Rails知識
 
-Rails（ActiveRecord、MVC）のパターン。`backend`、`api-design`、`sql-rdb` と併用する。
+Rails（ActiveRecord、MVC）のパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。
 
 ## モデルとクエリ
 

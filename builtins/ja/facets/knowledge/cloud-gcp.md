@@ -1,6 +1,6 @@
 # Google Cloud（GCP）知識
 
-GCP サービスと IAM のパターン。`kubernetes-docker`、`observability`、`terraform-aws`（IaC 規律）と併用する。
+GCP サービスと IAM のパターン。`kubernetes-docker`、`reliability-slo`、`incident-response`、`terraform-aws`（IaC 規律）と併用する。
 
 ## IAM とセキュリティ
 

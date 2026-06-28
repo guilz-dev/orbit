@@ -1,6 +1,6 @@
 # Google Cloud (GCP) Knowledge
 
-GCP service and IAM patterns. Pair with `kubernetes-docker`, `observability`, `terraform-aws` (for IaC discipline).
+GCP service and IAM patterns. Pair with `kubernetes-docker`, `reliability-slo`, `incident-response`, `terraform-aws` (for IaC discipline).
 
 ## IAM & Security
 

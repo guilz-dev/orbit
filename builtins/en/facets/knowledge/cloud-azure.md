@@ -1,6 +1,6 @@
 # Microsoft Azure Knowledge
 
-Azure service and identity patterns. Pair with `kubernetes-docker`, `observability`.
+Azure service and identity patterns. Pair with `kubernetes-docker`, `reliability-slo`, `incident-response`.
 
 ## Identity & Security
 

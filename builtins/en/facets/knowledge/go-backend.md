@@ -1,6 +1,6 @@
 # Go Backend Knowledge
 
-Idiomatic Go service patterns. Pair with `backend`, `api-design`, `sql-rdb`.
+Idiomatic Go service patterns. Pair with `backend`, `api-design`, `db-schema-design`, `indexing-query-tuning`.
 
 ## Errors
 

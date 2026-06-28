@@ -51,6 +51,10 @@ workflow_categories:
       - review-fix-backend-cqrs
       - review-takt-default
       - review-fix-takt-default
+      - review-ux
+      - review-fix-ux
+      - review-domain
+      - review-fix-domain
       - audit-unit
       - audit-e2e
       - audit-security

@@ -1,6 +1,6 @@
 # .NET / ASP.NET Core知識
 
-ASP.NET Core + EF Core サービスのパターン。`backend`、`api-design`、`sql-rdb` と併用する。
+ASP.NET Core + EF Core サービスのパターン。`backend`、`api-design`、`db-schema-design`、`indexing-query-tuning` と併用する。
 
 ## 非同期と DI
 

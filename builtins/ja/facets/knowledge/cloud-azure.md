@@ -1,6 +1,6 @@
 # Microsoft Azure知識
 
-Azure サービスと identity のパターン。`kubernetes-docker`、`observability` と併用する。
+Azure サービスと identity のパターン。`kubernetes-docker`、`reliability-slo`、`incident-response` と併用する。
 
 ## Identity とセキュリティ
 

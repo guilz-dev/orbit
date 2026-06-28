@@ -137,6 +137,11 @@ export interface WorkflowPromotionEntry {
   providerOptions?: StepProviderOptions;
 }
 
+export interface WorkflowVerifyConfig {
+  command: string;
+  expect: 'pass' | 'fail';
+}
+
 interface WorkflowStepBase {
   name: string;
   description?: string;
@@ -145,6 +150,7 @@ interface WorkflowStepBase {
   delayBeforeMs?: number;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
+  verify?: WorkflowVerifyConfig;
 }
 
 export interface AgentWorkflowStep extends WorkflowStepBase {
@@ -203,6 +209,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  verify?: never;
 }
 
 export interface WorkflowCallStep extends WorkflowStepBase {
@@ -233,6 +240,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   teamLeader?: never;
   policyContents?: never;
   knowledgeContents?: never;
+  verify?: never;
 }
 
 export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;

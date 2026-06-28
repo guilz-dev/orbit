@@ -1,5 +1,21 @@
 # Frontend Knowledge
 
+## Frontend Layer Structure
+
+Dependency direction is one-way. Reverse dependencies are forbidden.
+
+```
+app/routes/ → features/ → shared/
+```
+
+| Layer | Responsibility | Rule |
+|-------|----------------|------|
+| `app/routes/` | Route definitions only | No UI logic; call feature Views |
+| `features/` | Self-contained feature modules | Do not import other features directly |
+| `shared/` | Cross-feature shared code | Must not depend on features |
+
+Route files stay thin wrappers. Views (`features/*/components/*-view.tsx`) own data fetching and state.
+
 ## Component Design
 
 Do not write everything in one file. Always split components.
@@ -151,6 +167,21 @@ State Placement Guidelines:
 | Shared across nearby parent/child or sibling components | Nearest common parent, passed through props |
 | Shared across deep hierarchy or multiple screens | Context or state management library |
 | Server data cache | Data fetching library (TanStack Query, etc.) |
+
+## API Client Generation
+
+When the project uses a generated API client (Orval, openapi-typescript, etc.), use the generated client for new endpoints.
+
+| Pattern | Judgment |
+|---------|----------|
+| Direct axios/fetch while a generator exists | REJECT |
+| Hand-written API hooks without checking generator config | REJECT |
+| Direct calls when no generator exists in the project | OK |
+
+Checklist:
+1. Confirm generator config exists (orval.config.ts, openapi-generator, etc.)
+2. Follow existing generated-client usage patterns
+3. Add new endpoints to the generation pipeline and use generated hooks
 
 ## Initial load and refetch boundaries
 

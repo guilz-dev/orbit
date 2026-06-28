@@ -17,6 +17,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { buildJudgeConditions } from '../../../agents/judge-utils.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 import { evaluateWhenExpression } from './when-evaluator.js';
+import { evaluateVerifySignalCondition } from './verify-signal-evaluator.js';
 import { isDeferredDeterministicCondition, isDeterministicCondition } from './rule-utils.js';
 
 const log = createLogger('rule-evaluator');
@@ -208,6 +209,13 @@ export class RuleEvaluator {
         continue;
       }
       if (isDeferredDeterministicCondition(rule.condition)) {
+        continue;
+      }
+      const verifyMatch = evaluateVerifySignalCondition(rule.condition, this.step, this.ctx.state);
+      if (verifyMatch === true) {
+        return i;
+      }
+      if (verifyMatch === false) {
         continue;
       }
       if (evaluateWhenExpression(rule.condition, this.ctx.state)) {

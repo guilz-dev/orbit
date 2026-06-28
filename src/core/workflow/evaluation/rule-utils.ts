@@ -3,11 +3,13 @@
  */
 
 import type { WorkflowStep, OutputContractEntry } from '../../models/types.js';
+import { isVerifySignalCondition } from './verify-signal-evaluator.js';
 
 const DETERMINISTIC_CONDITION_PATTERN = /^(true|false|exists\(.*\)|(?:context|structured|effect)\..*|.*(?:==|!=|>=|<=|>|<).*)$/;
 
 export function isDeterministicCondition(condition: string): boolean {
-  return DETERMINISTIC_CONDITION_PATTERN.test(condition.trim());
+  const trimmed = condition.trim();
+  return isVerifySignalCondition(trimmed) || DETERMINISTIC_CONDITION_PATTERN.test(trimmed);
 }
 
 export function isDeferredDeterministicCondition(condition: string): boolean {

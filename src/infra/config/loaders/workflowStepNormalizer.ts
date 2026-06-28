@@ -7,6 +7,7 @@ import type {
   WorkflowStepRawSchema,
 } from '../../../core/models/index.js';
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
+import { isVerifyOnlyAgentFields } from '../../../core/models/verify-step-contract.js';
 import type { WorkflowArpeggioConfig, WorkflowMcpServersConfig, WorkflowOverrides } from '../../../core/models/config-types.js';
 import type {
   StepProviderOptions,
@@ -201,6 +202,18 @@ export function normalizeStepFromRaw(
     globalOverrides,
   );
 
+  const verify = step.verify
+    ? {
+      command: step.verify.command,
+      expect: step.verify.expect ?? 'pass',
+    }
+    : undefined;
+  const isVerifyOnly = isVerifyOnlyAgentFields({
+    verify: step.verify,
+    persona: rawPersona,
+    instruction: step.instruction,
+  });
+
   const normalizedStep: AgentWorkflowStep = {
     name: step.name,
     description: step.description,
@@ -217,8 +230,9 @@ export function normalizeStepFromRaw(
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
-    instruction: instruction || '{task}',
+    instruction: isVerifyOnly ? '' : (instruction || '{task}'),
     delayBeforeMs: step.delay_before_ms,
+    verify,
     structuredOutput: resolveStructuredOutput(step, workflowSchemas, {
       projectDir: context?.projectDir ?? workflowDir,
     }),

@@ -6,6 +6,11 @@ import { z } from 'zod/v4';
 import { INTERACTIVE_MODES } from './interactive-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
+  isHybridVerifyAgentStep,
+  hasRequiredVerifyRuleSignals,
+  extractRuleConditions,
+} from './verify-step-contract.js';
+import {
   McpServersSchema,
   StepProviderOptionsSchema,
   OutputContractsFieldSchema,
@@ -79,6 +84,11 @@ export const WorkflowRuleSchema = z.object({
     path: ['condition'],
   },
 );
+
+export const WorkflowVerifyRawSchema = z.object({
+  command: z.string().min(1),
+  expect: z.enum(['pass', 'fail']).optional().default('pass'),
+}).strict();
 
 const WorkflowPromotionRawSchema = z.object({
   at: z.number().int().positive().optional(),
@@ -272,6 +282,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     instruction: WorkflowFacetRefOrParamSchema.optional(),
     instruction_template: z.never().optional(),
     delay_before_ms: z.number().int().min(0).optional(),
+    verify: WorkflowVerifyRawSchema.optional(),
     structured_output: StructuredOutputRawSchema.optional(),
     system_inputs: z.array(SystemInputRawSchema).optional(),
     effects: z.array(WorkflowEffectRawSchema).optional(),
@@ -378,6 +389,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'output_contracts',
         'quality_gates',
         'pass_previous_response',
+        'verify',
       ] as const) {
         if (data[field] !== undefined) {
           ctx.addIssue({
@@ -425,6 +437,31 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     validateSystemStepFields(data, ctx);
+
+    if (data.verify !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['verify'],
+        message: 'verify is only allowed on agent steps',
+      });
+    }
+
+    if (data.verify !== undefined && stepKind === 'agent') {
+      if (isHybridVerifyAgentStep(data)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['verify'],
+          message: 'verify steps must be verify-only (no persona or instruction); use a dedicated verify step',
+        });
+      }
+      if (!hasRequiredVerifyRuleSignals(extractRuleConditions(data.rules))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['rules'],
+          message: 'verify steps require both __verify_pass and __verify_fail rules',
+        });
+      }
+    }
   }).transform((data) => {
     if (getWorkflowStepKind(data) !== 'agent') {
       return data;

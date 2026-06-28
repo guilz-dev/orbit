@@ -167,6 +167,31 @@ Validation inside an Aggregate should be limited to facts reproducible by event 
 
 Example: for an upload-completed command, the Aggregate decides whether the session owner matches the requester and whether the current state can be completed. The storage object key format and whether the key belongs to the current user/tenant are validated in the UseCase layer before sending the command.
 
+## Use Case Layer (Orchestration)
+
+Place a UseCase layer between Controller and CommandGateway. Validate against other aggregates' Read Models before dispatching commands, and run any required pre-processing.
+
+```
+Controller → UseCase → CommandGateway → Aggregate
+                ↓
+          QueryGateway / Repository (Read Model)
+```
+
+Use a UseCase when:
+- Read Model state from other aggregates must be checked before command dispatch
+- Multiple validations must run in sequence
+- Result consistency must be awaited after command dispatch (reactive polling)
+
+Skip a UseCase when:
+- Controller sends a single command and nothing else is required
+
+| Criteria | Judgment |
+|----------|----------|
+| Controller validates via direct Repository access | Move validation to UseCase layer |
+| UseCase depends on HTTP request/response types | REJECT. UseCase must be protocol-agnostic |
+| UseCase mutates Aggregate internal state directly | REJECT. Use CommandGateway |
+| UseCase waits via Subscription Query | REJECT. Use reactive polling in distributed environments |
+
 ## Projection Design
 
 | Criteria | Judgment |
@@ -531,7 +556,41 @@ Checklist:
 |--------|----------|
 | Aggregate tests verify events not state | Required |
 | Query side tests don't create data via Command | Recommended |
-| Integration tests consider Axon async processing | Required |
+| Integration tests consider async processing in the event pipeline | Required |
+
+## Value Object Design
+
+Use value objects for fields inside Aggregates and events. Do not leave domain identifiers and ranges as bare primitives when meaning and invariants matter.
+
+```kotlin
+// NG - primitives only
+data class OrderPlacedEvent(
+    val orderId: String,
+    val categoryId: String,
+    val from: LocalDateTime,
+    val to: LocalDateTime
+)
+
+// OK - value objects express meaning and constraints
+data class OrderPlacedEvent(
+    val orderId: String,
+    val categoryId: CategoryId,
+    val period: OrderPeriod
+)
+```
+
+Value object rules:
+- Use `data class` for equals/hashCode by value
+- Enforce invariants in `init`
+- Do not embed state-transition business logic (that belongs in the Aggregate)
+- Control serialization with `@JsonValue` when needed
+
+| Criteria | Judgment |
+|----------|----------|
+| IDs reused as raw String everywhere | Prefer value objects |
+| Repeated field groups (from/to, etc.) | Extract a value object |
+| Business logic (state transitions) inside value objects | REJECT |
+| Invariants not enforced at construction | REJECT |
 
 ## Master Data and CRUD
 

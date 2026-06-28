@@ -43,6 +43,8 @@ import type {
   StructuredOutputNormalizerRegistry,
 } from './structured-output-normalizer.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
+import { runVerifyOnlyStep } from './verify-step-runner.js';
+import { isVerifyOnlyStep } from './verify-step-utils.js';
 
 const log = createLogger('step-executor');
 
@@ -522,6 +524,17 @@ export class StepExecutor {
     runtime?: RuntimeStepResolution,
   ): Promise<StepRunResult> {
     await waitForStepDelay(step);
+
+    if (isVerifyOnlyStep(step)) {
+      const response = await runVerifyOnlyStep(step, state, this.deps.getCwd(), {
+        cwd: this.deps.getCwd(),
+        detectRuleIndex: this.deps.detectRuleIndex,
+        structuredCaller: this.deps.structuredCaller,
+        interactive: this.deps.getInteractive(),
+      });
+      return { response, instruction: '' };
+    }
+
     const stepIteration = prebuiltInstruction
       ? state.stepIterations.get(step.name) ?? 1
       : incrementStepIteration(state, step.name);

@@ -82,6 +82,11 @@ describe('isDeterministicCondition', () => {
     expect(isDeterministicCondition('structured.plan_followup.action == "noop"')).toBe(true);
   });
 
+  it('should return true for verify signal conditions', () => {
+    expect(isDeterministicCondition('__verify_pass')).toBe(true);
+    expect(isDeterministicCondition('__verify_fail')).toBe(true);
+  });
+
   it('should return false for plain tag conditions', () => {
     expect(isDeterministicCondition('approved')).toBe(false);
   });
